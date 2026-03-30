@@ -139,14 +139,24 @@ function readResults(movieKeyword) {
       }
 
       if (times.length > 0) {
-        // IMAX 앞에서 영화 제목 찾기
-        const imaxIdx = bodyText.toUpperCase().indexOf('IMAX');
-        let movieName = movieKeyword || '';
-        if (!movieName && imaxIdx > 0) {
-          const before = bodyText.substring(Math.max(0, imaxIdx - 200), imaxIdx);
-          const lines = before.split('\n').map((l) => l.trim()).filter((l) => l.length > 2 && l.length < 50);
-          movieName = lines[lines.length - 1] || 'IMAX 상영';
+        // 영화 제목 찾기: 페이지에서 전체 이름 추출
+        let movieName = '';
+        const titleMatch = bodyText.match(/([가-힣a-zA-Z0-9\s:·\-]+)\s+\d+시간\s*\d*분/);
+        if (titleMatch) {
+          movieName = titleMatch[1].trim();
         }
+        if (!movieName && movieKeyword) {
+          // 키워드가 포함된 전체 영화명 찾기
+          const kw = movieKeyword.toLowerCase();
+          const imgs = document.querySelectorAll('img[alt]');
+          for (const img of imgs) {
+            if (img.alt.toLowerCase().includes(kw) && img.alt.includes('포스터')) {
+              movieName = img.alt.replace(' 포스터', '').trim();
+              break;
+            }
+          }
+        }
+        if (!movieName) movieName = movieKeyword || 'IMAX 상영';
 
         showtimes.push({ movieName, hallName: 'IMAX', times });
       }
