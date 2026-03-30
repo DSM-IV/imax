@@ -28,114 +28,92 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
   const targetDay = parseInt(date.substring(6, 8));
 
   try {
-    // ===== 1단계: 영화 검색 + 클릭 =====
-    // 영화명 검색창에 입력
+    // ===== 1단계: 포스터 직접 클릭 =====
     const s1 = await run(tab.id, (kw) => {
-      // 검색창 찾기 ("영화명을 입력해주세요")
-      for (const input of document.querySelectorAll('input')) {
-        if (input.placeholder?.includes('영화명') || input.placeholder?.includes('검색')) {
-          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-          setter.call(input, kw);
-          input.dispatchEvent(new Event('input', { bubbles: true }));
-          return 'searched';
+      // 포스터 이미지 클릭 (가장 확실한 방법)
+      for (const img of document.querySelectorAll('img[alt]')) {
+        if (img.alt.toLowerCase().includes(kw.toLowerCase()) && img.alt.includes('포스터')) {
+          const target = img.closest('a,button,li,div,[role="button"]') || img;
+          target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          return 'clicked: ' + img.alt.substring(0, 30);
         }
       }
-      // 검색창 못 찾으면 포스터 직접 클릭
+      // 포스터 못 찾으면 텍스트로
       for (const img of document.querySelectorAll('img[alt]')) {
-        if (img.alt.includes(kw)) {
-          (img.closest('a,button,li,[role="button"]') || img).dispatchEvent(new MouseEvent('click', { bubbles: true }));
-          return 'clicked_poster';
+        if (img.alt.toLowerCase().includes(kw.toLowerCase())) {
+          const target = img.closest('a,button,li,div,[role="button"]') || img;
+          target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+          return 'clicked: ' + img.alt.substring(0, 30);
         }
       }
       return 'fail';
     }, [movieKeyword || '헤일메리']);
     logs.push(`1.영화: ${s1}`);
-    await wait(2000);
+    await wait(5000); // 예매 화면 전환 대기
 
-    // 검색 결과에서 클릭 (검색한 경우)
-    if (s1 === 'searched') {
-      const s1b = await run(tab.id, (kw) => {
-        for (const el of document.querySelectorAll('img[alt], strong, span, a, div, li')) {
-          const text = el.alt || el.textContent?.trim() || '';
-          if (text.includes(kw) && text.length < 40 && el.offsetParent !== null) {
-            (el.closest('a,button,li,[role="button"]') || el).dispatchEvent(new MouseEvent('click', { bubbles: true }));
-            return 'clicked: ' + text.substring(0, 30);
-          }
-        }
-        return 'fail';
-      }, [movieKeyword || '헤일메리']);
-      logs.push(`1b.검색결과: ${s1b}`);
-      await wait(3000);
-    }
+    // 전환 확인
+    const movieOk = await run(tab.id, () => {
+      const text = document.body?.innerText || '';
+      return text.includes('시간') && (text.includes('광교') || text.includes('CGV') || text.includes('전체보기'));
+    });
+    logs.push(`1b.화면전환: ${movieOk ? '성공' : '실패'}`);
 
     // ===== 2단계: ⊕ 버튼 클릭 (극장 변경) =====
-    const s2 = await run(tab.id, () => {
-      // 방법 1: 모든 SVG path 중 원 또는 + 형태 찾기
-      for (const svg of document.querySelectorAll('svg')) {
-        const btn = svg.closest('button, a, div, span');
-        if (!btn || !btn.offsetParent) continue;
-        const rect = svg.getBoundingClientRect();
-        // 작은 아이콘 (15~35px)
-        if (rect.width >= 15 && rect.width <= 40 && rect.height >= 15 && rect.height <= 40) {
-          // 극장 목록 근처에 있는지 확인 (y 위치)
-          const text = btn.parentElement?.innerText || '';
-          if (text.includes('광교') || text.includes('동수원') || text.includes('자주') ||
-              text.includes('CGV') || text.length < 5) {
-            btn.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-            return 'clicked_svg_near_theater';
+    // ⊕ 버튼을 여러 방법으로 시도하고 바텀시트 열릴 때까지 재시도
+    let sheetOpen = false;
+    for (let attempt = 0; attempt < 3 && !sheetOpen; attempt++) {
+      await run(tab.id, (attempt) => {
+        const methods = [];
+        // 극장 칩(광교 등) 옆의 ⊕ 아이콘 찾기
+        // 극장 칩들이 있는 컨테이너에서 마지막 클릭 가능 요소
+        const chips = [];
+        document.querySelectorAll('*').forEach(el => {
+          const t = el.textContent?.trim();
+          if ((t === '광교' || t === '동수원' || t === '광교상현') && el.children.length === 0 && el.offsetParent) {
+            chips.push(el);
           }
-        }
-      }
-      // 방법 2: 극장 이름 근처의 마지막 버튼/아이콘
-      for (const el of document.querySelectorAll('*')) {
-        if (el.textContent?.trim() === '광교' && el.children.length === 0) {
-          const container = el.closest('div, section, ul');
-          if (container) {
-            const btns = container.querySelectorAll('button, a, svg, [role="button"]');
-            const lastBtn = btns[btns.length - 1];
-            if (lastBtn) {
-              (lastBtn.closest('button, a, div') || lastBtn).dispatchEvent(new MouseEvent('click', { bubbles: true }));
-              return 'clicked_last_btn_near_theater';
+        });
+        if (chips.length > 0) {
+          // 칩들의 공통 부모 찾기
+          const parent = chips[0].closest('div, section, nav, ul');
+          if (parent) {
+            // 부모 안의 모든 클릭 가능 요소 중 마지막 것 (⊕ 버튼)
+            const clickables = parent.querySelectorAll('button, a, [role="button"], svg');
+            for (let i = clickables.length - 1; i >= 0; i--) {
+              const el = clickables[i];
+              const rect = el.getBoundingClientRect();
+              if (rect.width > 0 && rect.width < 50) {
+                (el.closest('button, a, div') || el).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                methods.push('chip_sibling');
+                break;
+              }
             }
           }
         }
-      }
-      // 방법 3: aria-label로 찾기
-      for (const el of document.querySelectorAll('[aria-label]')) {
-        const label = el.getAttribute('aria-label');
-        if (label?.includes('추가') || label?.includes('극장') || label?.includes('변경')) {
-          el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-          return 'clicked_aria: ' + label;
+        if (methods.length === 0 && attempt >= 1) {
+          // 대안: 페이지의 모든 작은 원형 버튼 클릭 시도
+          document.querySelectorAll('button, [role="button"]').forEach(btn => {
+            const rect = btn.getBoundingClientRect();
+            if (rect.width >= 20 && rect.width <= 45 && rect.height >= 20 && rect.height <= 45) {
+              const text = btn.textContent?.trim();
+              if (!text || text.length <= 1) {
+                btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                methods.push('small_btn');
+              }
+            }
+          });
         }
-      }
-      return 'fail';
-    });
-    logs.push(`2.⊕버튼: ${s2}`);
-    await wait(2000);
-
-    // 바텀시트 열렸는지 확인
-    const sheetOpen = await run(tab.id, () => {
-      return document.body.innerText.includes('지역을 입력해주세요') ||
-             document.body.innerText.includes('지역별') ||
-             !!document.querySelector('input[placeholder*="지역"]');
-    });
-    logs.push(`2b.바텀시트: ${sheetOpen ? '열림' : '안열림'}`);
-
-    if (!sheetOpen) {
-      // 바텀시트 안 열리면 "특별관" 탭에서 IMAX로 시도
-      const s2c = await run(tab.id, (name) => {
-        // 그냥 페이지에서 극장 이름 직접 찾아 클릭
-        for (const el of document.querySelectorAll('*')) {
-          if (el.textContent?.trim() === name && el.children.length === 0 && el.offsetParent) {
-            el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-            return 'clicked_direct';
-          }
-        }
-        return 'fail';
-      }, [theaterName]);
-      logs.push(`2c.직접찾기: ${s2c}`);
+        return methods.join(',') || 'none';
+      }, [attempt]);
       await wait(2000);
+
+      sheetOpen = await run(tab.id, () => {
+        return document.body.innerText.includes('지역을 입력해주세요') ||
+               document.body.innerText.includes('지역별') ||
+               !!document.querySelector('input[placeholder*="지역"]');
+      });
     }
+    logs.push(`2.바텀시트: ${sheetOpen ? '열림 ✅' : '안열림 ❌'}`);
 
     // ===== 3단계: 검색창에 극장 입력 =====
     if (sheetOpen) {
