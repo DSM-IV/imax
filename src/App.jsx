@@ -129,7 +129,9 @@ function App() {
   }, [selectedTheater, selectedDates, movieKeyword, dates, addLog, notify]);
 
   const startMonitoring = useCallback(async () => {
-    if (permission !== 'granted') {
+    const currentPermission =
+      typeof Notification !== 'undefined' ? Notification.permission : 'denied';
+    if (currentPermission !== 'granted') {
       const result = await requestPermission();
       if (result !== 'granted') {
         addLog('⚠️ 알림 권한이 필요합니다', 'error');
