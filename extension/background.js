@@ -156,6 +156,30 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
         return 'fail (visible: ' + [...new Set(visible)].slice(0, 10).join(', ') + ')';
       }, [theaterName]);
       logs.push(`4.극장선택: ${s4}`);
+      await wait(2000);
+
+      // 4b: 극장 칩 클릭 (목록에 추가된 후 활성화)
+      const s4b = await run(tab.id, (name) => {
+        // 바텀시트가 닫힌 후, 극장 칩 목록에서 클릭
+        for (const el of document.querySelectorAll('button, span, div, a, li')) {
+          const text = el.textContent?.trim();
+          if (text === name && el.offsetParent && el.children.length <= 2) {
+            el.click();
+            return 'clicked_chip';
+          }
+        }
+        // "용산" 짧은 이름으로 시도
+        const short = name.substring(0, 4);
+        for (const el of document.querySelectorAll('button, span, div, a, li')) {
+          const text = el.textContent?.trim();
+          if (text?.includes(short) && text.length < 15 && el.offsetParent) {
+            el.click();
+            return 'clicked_short: ' + text;
+          }
+        }
+        return 'fail';
+      }, [theaterName]);
+      logs.push(`4b.칩클릭: ${s4b}`);
       await wait(3000);
     }
 
