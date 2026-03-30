@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "CGV IMAX 예매 알림",
+  "version": "1.0",
+  "description": "CGV IMAX 상영이 열리면 알림을 보내줍니다",
+  "permissions": ["alarms", "notifications", "storage"],
+  "host_permissions": ["https://www.cgv.co.kr/*", "http://www.cgv.co.kr/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": "icon.png"
+  },
+  "icons": {
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}

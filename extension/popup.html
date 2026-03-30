@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 380px;
+      font: 13px/1.5 'Segoe UI', system-ui, sans-serif;
+      color: #1a1a2e;
+      background: #f8f9fa;
+    }
+    header {
+      background: linear-gradient(135deg, #e50914, #b20710);
+      color: #fff;
+      padding: 14px 16px;
+      text-align: center;
+    }
+    header h1 { font-size: 16px; font-weight: 700; }
+    header p { font-size: 11px; opacity: 0.85; margin-top: 2px; }
+
+    .section { padding: 12px 16px; border-bottom: 1px solid #e9ecef; }
+    .section-title { font-size: 12px; font-weight: 700; color: #495057; margin-bottom: 8px; }
+
+    input[type="text"] {
+      width: 100%; padding: 8px 10px; border: 1px solid #dee2e6;
+      border-radius: 6px; font-size: 13px; outline: none;
+    }
+    input:focus { border-color: #e50914; box-shadow: 0 0 0 2px rgba(229,9,20,0.15); }
+
+    .theater-grid {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 4px; max-height: 180px; overflow-y: auto;
+    }
+    .theater-btn {
+      padding: 6px 8px; border: 1px solid #dee2e6; border-radius: 6px;
+      background: #fff; cursor: pointer; font-size: 11px; text-align: left;
+      transition: all 0.15s;
+    }
+    .theater-btn:hover { border-color: #e50914; background: #fff5f5; }
+    .theater-btn.active { background: #e50914; color: #fff; border-color: #e50914; }
+    .theater-btn .type { font-size: 9px; opacity: 0.7; display: block; }
+    .theater-btn.active .type { opacity: 0.85; }
+
+    .date-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 4px; max-height: 120px; overflow-y: auto;
+    }
+    .date-btn {
+      padding: 5px 4px; border: 1px solid #dee2e6; border-radius: 6px;
+      background: #fff; cursor: pointer; font-size: 11px; text-align: center;
+      transition: all 0.15s;
+    }
+    .date-btn:hover { border-color: #e50914; }
+    .date-btn.active { background: #e50914; color: #fff; border-color: #e50914; }
+    .date-btn .weekday { font-size: 9px; }
+    .date-btn.weekend .weekday { color: #e50914; }
+    .date-btn.active.weekend .weekday { color: #ffcdd2; }
+
+    .controls { display: flex; gap: 8px; padding: 12px 16px; }
+    .btn {
+      flex: 1; padding: 10px; border: none; border-radius: 8px;
+      font-size: 13px; font-weight: 700; cursor: pointer; transition: all 0.15s;
+    }
+    .btn-start { background: #e50914; color: #fff; }
+    .btn-start:hover { background: #b20710; }
+    .btn-start:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-stop { background: #6c757d; color: #fff; }
+    .btn-stop:hover { background: #495057; }
+
+    .status {
+      text-align: center; padding: 8px; font-size: 12px; font-weight: 600;
+    }
+    .status.on { color: #16a34a; animation: blink 1.5s infinite; }
+    .status.off { color: #6c757d; }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.4; }
+    }
+
+    .found-card {
+      margin: 0 16px 8px; padding: 10px 12px;
+      background: #f0fdf4; border: 1px solid #4ade80; border-radius: 8px;
+    }
+    .found-card .movie { font-weight: 700; font-size: 14px; color: #15803d; }
+    .found-card .detail { font-size: 11px; color: #166534; margin: 2px 0 6px; }
+    .found-card .times { display: flex; gap: 4px; flex-wrap: wrap; }
+    .time-tag {
+      background: #dcfce7; color: #15803d; padding: 2px 8px;
+      border-radius: 4px; font-size: 11px; font-weight: 600; font-family: monospace;
+    }
+    .book-link {
+      display: block; margin-top: 8px; text-align: center; padding: 6px;
+      background: #e50914; color: #fff; border-radius: 6px;
+      text-decoration: none; font-size: 12px; font-weight: 700;
+    }
+
+    .log-section { padding: 8px 16px 12px; }
+    .log-list {
+      list-style: none; max-height: 120px; overflow-y: auto;
+      font-size: 10px; font-family: monospace;
+    }
+    .log-list li { padding: 2px 0; border-bottom: 1px solid #f1f3f5; }
+    .log-time { color: #adb5bd; margin-right: 4px; }
+    .log-success { color: #16a34a; }
+    .log-error { color: #e50914; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🎬 CGV IMAX 예매 알림</h1>
+    <p>IMAX 상영이 열리면 알려드립니다</p>
+  </header>
+
+  <div id="found-section"></div>
+
+  <div class="section">
+    <div class="section-title">🔍 영화 키워드 (비워두면 전체 IMAX)</div>
+    <input type="text" id="movieKeyword" placeholder="예: 헤일메리, 인터스텔라..." />
+  </div>
+
+  <div class="section">
+    <div class="section-title">🏢 CGV IMAX 극장</div>
+    <div class="theater-grid" id="theaterGrid"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">📅 날짜 (복수 선택)</div>
+    <div class="date-grid" id="dateGrid"></div>
+  </div>
+
+  <div id="statusBar" class="status off">대기 중</div>
+  <div class="controls">
+    <button class="btn btn-start" id="startBtn">모니터링 시작</button>
+    <button class="btn btn-stop" id="stopBtn" style="display:none">중지</button>
+  </div>
+
+  <div class="log-section">
+    <div class="section-title">📋 로그 <span id="logClear" style="float:right;cursor:pointer;color:#adb5bd">지우기</span></div>
+    <ul class="log-list" id="logList"></ul>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
