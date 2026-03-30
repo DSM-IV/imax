@@ -95,7 +95,7 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
         const inputs = document.querySelectorAll('input');
         for (const input of inputs) {
           const ph = input.placeholder || '';
-          if (ph.includes('지역') || ph.includes('검색') || ph.includes('입력')) {
+          if (ph.includes('지역')) {
             input.focus();
             // React 호환 value 설정
             const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
