@@ -173,26 +173,23 @@ function readResults(targetDate) {
   debug.hasImaxSection = hasImaxSection;
 
   if (hasImaxSection) {
-    // "IMAX관" 또는 "IMAX LASER" 이후 텍스트에서 시간 추출
+    // "IMAX관" 위치 찾기
     const imaxIdx = bodyText.indexOf('IMAX관');
-    const laserIdx = bodyText.indexOf('IMAX LASER');
-    const startIdx = Math.max(imaxIdx, laserIdx);
+    if (imaxIdx >= 0) {
+      const afterImax = bodyText.substring(imaxIdx);
 
-    if (startIdx >= 0) {
-      const afterImax = bodyText.substring(startIdx, Math.min(bodyText.length, startIdx + 500));
-      debug.imaxSection = afterImax.substring(0, 300);
+      // IMAX 섹션만 추출: 다음 상영관 시작 전까지
+      // 다른 상영관: "2D ", "3D ", "숫자관", "DOLBY", "SCREENX", "4DX" 등
+      const nextScreenMatch = afterImax.match(/\n\s*(2D|3D|\d+관|DOLBY|SCREENX|4DX|ULTRA|COMFORT)/);
+      const imaxSectionEnd = nextScreenMatch ? nextScreenMatch.index : 300;
+      const imaxBlock = afterImax.substring(0, imaxSectionEnd);
+      debug.imaxSection = imaxBlock.substring(0, 300);
 
-      // 영화 이름: IMAX관 앞에서 찾기
-      const beforeImax = bodyText.substring(Math.max(0, startIdx - 300), startIdx);
-      const titleMatch = beforeImax.match(/([가-힣a-zA-Z0-9\s:·\-]+)\s+\d+시간\s*\d*분/);
-      const movieName = titleMatch ? titleMatch[1].trim() : '';
-
-      // 시간 패턴: "11:00-13:46" 다음 줄에 "65·624석" 또는 "65/624석"
-      // 또는 한 줄에 "11:00-13:46 65·624석"
+      // 시간 추출: "13:00-15:46 215/282석" 또는 "13:00-15:46\n215·282석"
       const showPattern = /(\d{2}:\d{2})-(\d{2}:\d{2})\s*[\n]?\s*(\d+)[·/:](\d+)석/g;
       let match;
       const times = [];
-      while ((match = showPattern.exec(afterImax)) !== null) {
+      while ((match = showPattern.exec(imaxBlock)) !== null) {
         times.push({
           startTime: match[1],
           endTime: match[2],
@@ -200,6 +197,16 @@ function readResults(targetDate) {
           totalSeats: parseInt(match[4]),
           isSoldOut: parseInt(match[3]) === 0,
         });
+      }
+
+      // 영화 이름: "프로젝트 헤일메리 2시간 36분" 패턴에서 추출
+      const fullText = bodyText;
+      const titleMatch = fullText.match(/([\uAC00-\uD7A3a-zA-Z0-9\s:·\-]+)\s+\d+시간\s*\d*분/);
+      let movieName = titleMatch ? titleMatch[1].trim() : '';
+      // 제목 앞에 붙은 노이즈 제거 (마지막 단어부터 한글 시작점 찾기)
+      if (movieName.length > 30) {
+        const lines = movieName.split('\n');
+        movieName = lines[lines.length - 1].trim();
       }
 
       if (times.length > 0) {
