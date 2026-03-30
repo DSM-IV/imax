@@ -58,53 +58,67 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
     });
     logs.push(`1b.화면전환: ${movieOk ? '성공' : '실패'}`);
 
-    // ===== 2단계: ⊕ 버튼 클릭 (극장 변경) =====
-    // ⊕ 버튼을 여러 방법으로 시도하고 바텀시트 열릴 때까지 재시도
+    // ===== 2단계: ⊕ 버튼 DOM 구조 분석 + 클릭 =====
+    const s2debug = await run(tab.id, () => {
+      // 광교 텍스트가 있는 요소 찾기
+      let chipEl = null;
+      for (const el of document.querySelectorAll('*')) {
+        if (el.textContent?.trim() === '광교' && el.children.length === 0 && el.offsetParent) {
+          chipEl = el;
+          break;
+        }
+      }
+      if (!chipEl) return 'no_chip';
+
+      // 부모를 올라가면서 ⊕ 버튼 구조 파악
+      let container = chipEl;
+      let html = '';
+      for (let i = 0; i < 5; i++) {
+        container = container.parentElement;
+        if (!container) break;
+        html = container.outerHTML;
+        // 적당한 크기의 컨테이너 (너무 크지 않게)
+        if (html.length > 200 && html.length < 5000) break;
+      }
+
+      // 컨테이너의 HTML 반환 (⊕ 버튼 구조 파악용)
+      return html.substring(0, 1500);
+    });
+    logs.push(`2.DOM: ${(s2debug || '').substring(0, 300)}`);
+
+    // 실제 클릭 시도: outerHTML에서 ⊕ 버튼 태그/클래스 파악 후 클릭
     let sheetOpen = false;
     for (let attempt = 0; attempt < 3 && !sheetOpen; attempt++) {
-      await run(tab.id, (attempt) => {
-        const methods = [];
-        // 극장 칩(광교 등) 옆의 ⊕ 아이콘 찾기
-        // 극장 칩들이 있는 컨테이너에서 마지막 클릭 가능 요소
-        const chips = [];
-        document.querySelectorAll('*').forEach(el => {
-          const t = el.textContent?.trim();
-          if ((t === '광교' || t === '동수원' || t === '광교상현') && el.children.length === 0 && el.offsetParent) {
-            chips.push(el);
+      await run(tab.id, () => {
+        // 광교 칩의 부모 컨테이너에서 마지막 버튼/링크 클릭
+        let chipEl = null;
+        for (const el of document.querySelectorAll('*')) {
+          if (el.textContent?.trim() === '광교' && el.children.length === 0 && el.offsetParent) {
+            chipEl = el; break;
           }
-        });
-        if (chips.length > 0) {
-          // 칩들의 공통 부모 찾기
-          const parent = chips[0].closest('div, section, nav, ul');
-          if (parent) {
-            // 부모 안의 모든 클릭 가능 요소 중 마지막 것 (⊕ 버튼)
-            const clickables = parent.querySelectorAll('button, a, [role="button"], svg');
-            for (let i = clickables.length - 1; i >= 0; i--) {
-              const el = clickables[i];
-              const rect = el.getBoundingClientRect();
-              if (rect.width > 0 && rect.width < 50) {
-                (el.closest('button, a, div') || el).dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                methods.push('chip_sibling');
-                break;
-              }
+        }
+        if (!chipEl) return;
+
+        // 부모를 3단계까지 올라가며 탐색
+        let parent = chipEl;
+        for (let i = 0; i < 4; i++) {
+          parent = parent.parentElement;
+          if (!parent) return;
+
+          // 이 레벨에서 ⊕ 버튼 찾기 (텍스트 없는 작은 요소)
+          const children = parent.children;
+          for (let j = children.length - 1; j >= 0; j--) {
+            const child = children[j];
+            const text = child.textContent?.trim();
+            const rect = child.getBoundingClientRect();
+            // 텍스트가 없거나 매우 짧고, 크기가 작은 요소 = ⊕ 아이콘
+            if ((!text || text.length <= 1) && rect.width > 5 && rect.width < 60 && rect.height > 5) {
+              child.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+              return;
             }
           }
         }
-        if (methods.length === 0 && attempt >= 1) {
-          // 대안: 페이지의 모든 작은 원형 버튼 클릭 시도
-          document.querySelectorAll('button, [role="button"]').forEach(btn => {
-            const rect = btn.getBoundingClientRect();
-            if (rect.width >= 20 && rect.width <= 45 && rect.height >= 20 && rect.height <= 45) {
-              const text = btn.textContent?.trim();
-              if (!text || text.length <= 1) {
-                btn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-                methods.push('small_btn');
-              }
-            }
-          });
-        }
-        return methods.join(',') || 'none';
-      }, [attempt]);
+      });
       await wait(2000);
 
       sheetOpen = await run(tab.id, () => {
@@ -113,7 +127,7 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
                !!document.querySelector('input[placeholder*="지역"]');
       });
     }
-    logs.push(`2.바텀시트: ${sheetOpen ? '열림 ✅' : '안열림 ❌'}`);
+    logs.push(`2b.바텀시트: ${sheetOpen ? '열림 ✅' : '안열림 ❌'}`);
 
     // ===== 3단계: 검색창에 극장 입력 =====
     if (sheetOpen) {
