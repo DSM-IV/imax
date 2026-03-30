@@ -94,29 +94,66 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
       const s3 = await run(tab.id, (name) => {
         const inputs = document.querySelectorAll('input');
         for (const input of inputs) {
-          if (input.placeholder?.includes('지역') || input.placeholder?.includes('검색')) {
+          const ph = input.placeholder || '';
+          if (ph.includes('지역') || ph.includes('검색') || ph.includes('입력')) {
             input.focus();
+            // React 호환 value 설정
             const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
             setter.call(input, name);
             input.dispatchEvent(new Event('input', { bubbles: true }));
-            return 'typed';
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+            // 키보드 이벤트도 발생 (검색 트리거)
+            input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
+            input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
+            return 'typed: ' + ph.substring(0, 20);
           }
         }
         return 'no_input';
       }, [theaterName]);
       logs.push(`3.극장검색: ${s3}`);
-      await wait(2000);
+      await wait(3000); // 자동완성 로딩 대기 증가
 
-      // 자동완성에서 클릭
+      // 자동완성에서 클릭 (유연한 매칭)
       const s4 = await run(tab.id, (name) => {
-        for (const el of document.querySelectorAll('li, div, a, button, span')) {
+        // 바텀시트 내의 모든 요소에서 극장명 찾기
+        const allEls = document.querySelectorAll('li, div, a, button, span, p');
+        for (const el of allEls) {
+          if (!el.offsetParent) continue;
           const text = el.textContent?.trim();
-          if (text === name && el.offsetParent !== null && el.children.length <= 2) {
-            el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-            return 'clicked';
+          // 정확히 일치
+          if (text === name) {
+            el.click();
+            return 'exact: ' + text;
           }
         }
-        return 'fail';
+        // 부분 일치 (극장명 포함 + 짧은 텍스트)
+        for (const el of allEls) {
+          if (!el.offsetParent) continue;
+          const text = el.textContent?.trim();
+          if (text?.includes(name) && text.length < name.length + 20) {
+            el.click();
+            return 'partial: ' + text.substring(0, 30);
+          }
+        }
+        // "용산" 키워드로 검색
+        const shortName = name.replace('CGV ', '').substring(0, 4);
+        for (const el of allEls) {
+          if (!el.offsetParent) continue;
+          const text = el.textContent?.trim();
+          if (text?.includes(shortName) && text.length < 20 && !text.includes('서울') && !text.includes('경기')) {
+            el.click();
+            return 'short: ' + text;
+          }
+        }
+        // 현재 바텀시트에 보이는 텍스트 목록
+        const visible = [];
+        allEls.forEach(el => {
+          if (el.offsetParent && el.children.length === 0) {
+            const t = el.textContent?.trim();
+            if (t && t.length > 1 && t.length < 30) visible.push(t);
+          }
+        });
+        return 'fail (visible: ' + [...new Set(visible)].slice(0, 10).join(', ') + ')';
       }, [theaterName]);
       logs.push(`4.극장선택: ${s4}`);
       await wait(3000);
