@@ -5,7 +5,6 @@ async function fetchCgvShowtimes(theaterCode, areaCode, date, movieKeyword) {
   const url = 'https://cgv.co.kr/cnm/movieBook/movie';
   const tab = await chrome.tabs.create({ url, active: false });
 
-  // 페이지 로드 완료 대기
   await new Promise((resolve) => {
     function listener(tabId, info) {
       if (tabId === tab.id && info.status === 'complete') {
@@ -31,7 +30,7 @@ async function fetchCgvShowtimes(theaterCode, areaCode, date, movieKeyword) {
 
   await new Promise((r) => setTimeout(r, 3000));
 
-  // 2단계: 극장 + 날짜 선택
+  // 2단계: 극장 + IMAX + 날짜 선택
   try {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
@@ -42,7 +41,7 @@ async function fetchCgvShowtimes(theaterCode, areaCode, date, movieKeyword) {
 
   await new Promise((r) => setTimeout(r, 5000));
 
-  // 3단계: 가로챈 API 데이터 + 페이지 DOM 읽기
+  // 3단계: 결과 읽기
   let results;
   try {
     const injection = await chrome.scripting.executeScript({
@@ -59,38 +58,20 @@ async function fetchCgvShowtimes(theaterCode, areaCode, date, movieKeyword) {
   return results;
 }
 
-// 영화 포스터/이름 클릭
 function clickMovie(keyword) {
   if (!keyword) return;
   const kw = keyword.toLowerCase();
-
-  // 영화 포스터 이미지의 alt에서 찾기
   const imgs = document.querySelectorAll('img[alt]');
   for (const img of imgs) {
     if (img.alt.toLowerCase().includes(kw)) {
-      const clickable = img.closest('a') || img.closest('button') || img.closest('[role="button"]') || img;
+      const clickable = img.closest('a') || img.closest('button') || img;
       clickable.click();
-      return 'clicked_img: ' + img.alt;
+      return;
     }
   }
-
-  // 텍스트에서 찾기
-  const allEls = document.querySelectorAll('a, button, li, div, span, strong');
-  for (const el of allEls) {
-    const text = el.textContent.trim();
-    if (text.toLowerCase().includes(kw) && text.length < 50) {
-      el.click();
-      return 'clicked_text: ' + text;
-    }
-  }
-  return 'not_found';
 }
 
-// 극장과 날짜 선택
 function selectTheaterAndDate(theaterCode, date) {
-  const bodyText = document.body?.innerText || '';
-
-  // 극장 이름 매핑
   const theaterNames = {
     '0013': '용산', '0074': '왕십리', '0056': '강남', '0059': '영등포',
     '0001': '명동', '0229': '여의도', '0014': '건대', '0247': '연수',
@@ -109,26 +90,15 @@ function selectTheaterAndDate(theaterCode, date) {
     }
   }
 
-  // IMAX 필터 클릭
-  setTimeout(() => {
-    const allEls2 = document.querySelectorAll('a, button, li, div, span');
-    for (const el of allEls2) {
-      if (el.textContent.trim().toUpperCase() === 'IMAX') {
-        el.click();
-        break;
-      }
-    }
-  }, 1000);
-
-  // 날짜 선택 (4/3 등)
+  // 날짜 선택
   if (date) {
-    const month = parseInt(date.substring(4, 6));
     const day = parseInt(date.substring(6, 8));
+    const dayStr = String(day).padStart(2, '0');
     setTimeout(() => {
       const dateEls = document.querySelectorAll('a, button, li, span, div');
       for (const el of dateEls) {
         const text = el.textContent.trim();
-        if (text === String(day) || text === `${month}/${day}` || text === `${day}일`) {
+        if (text === String(day) || text === dayStr) {
           el.click();
           break;
         }
@@ -137,75 +107,84 @@ function selectTheaterAndDate(theaterCode, date) {
   }
 }
 
-// 결과 읽기: 가로챈 API + 페이지 DOM
+// 렌더링된 페이지에서 IMAX 상영 정보 파싱
 function readResults(movieKeyword) {
   const debug = {};
   const showtimes = [];
 
-  // 가로챈 API 데이터 확인
-  const captured = window.__cgvCapturedApis || [];
-  debug.capturedCount = captured.length;
-  debug.capturedApis = captured.map((c) => ({
-    url: c.url,
-    status: c.status,
-    length: c.length,
-    hasImax: c.hasImax,
-    bodyPreview: c.body?.substring(0, 300),
-  }));
-
-  // 페이지 DOM 분석
   const bodyText = document.body?.innerText || '';
   debug.textLength = bodyText.length;
   debug.hasImax = bodyText.toUpperCase().includes('IMAX');
   debug.url = location.href;
 
-  // IMAX 근처 텍스트
-  if (debug.hasImax) {
-    const text = bodyText;
-    const positions = [];
-    let idx = 0;
-    while (idx < text.length) {
-      const pos = text.toUpperCase().indexOf('IMAX', idx);
-      if (pos === -1) break;
-      positions.push(text.substring(Math.max(0, pos - 100), Math.min(text.length, pos + 200)));
-      idx = pos + 4;
-      if (positions.length >= 3) break;
-    }
-    debug.imaxContexts = positions;
-  }
+  // IMAX 섹션 파싱: "IMAX관" 또는 "IMAX LASER" 뒤의 상영시간 추출
+  // 형식: "09:30-12:16 201/282석 12:35-15:21 229/282석"
+  const imaxPattern = /IMAX[^\n]*?\n?((?:\d{2}:\d{2}-\d{2}:\d{2}\s+\d+\/\d+석\s*)+)/gi;
+  const imaxMatches = bodyText.match(imaxPattern);
 
-  // 시간 패턴 찾기 (HH:MM)
-  const timePattern = /\d{2}:\d{2}/g;
-  const timesInPage = bodyText.match(timePattern) || [];
-  debug.timesFound = timesInPage;
-
-  // IMAX + 시간이 있는 섹션 파싱
-  if (debug.hasImax && timesInPage.length > 0) {
-    // IMAX 근처에 시간이 있으면 상영 정보로 판단
-    const lines = bodyText.split('\n').map((l) => l.trim()).filter(Boolean);
-    let inImaxSection = false;
-    let currentMovie = movieKeyword || '';
-
-    for (let i = 0; i < lines.length; i++) {
-      if (lines[i].toUpperCase().includes('IMAX')) {
-        inImaxSection = true;
+  if (imaxMatches) {
+    for (const block of imaxMatches) {
+      // 개별 상영 시간 추출: "09:30-12:16 201/282석"
+      const showPattern = /(\d{2}:\d{2})-(\d{2}:\d{2})\s+(\d+)\/(\d+)석/g;
+      let match;
+      const times = [];
+      while ((match = showPattern.exec(block)) !== null) {
+        times.push({
+          startTime: match[1],
+          endTime: match[2],
+          remainSeats: parseInt(match[3]),
+          totalSeats: parseInt(match[4]),
+          isSoldOut: parseInt(match[3]) === 0,
+        });
       }
-      if (inImaxSection) {
-        const times = lines[i].match(/\d{2}:\d{2}/g);
-        if (times) {
-          showtimes.push({
-            movieName: currentMovie || 'IMAX 상영',
-            hallName: 'IMAX',
-            times: times.map((t) => ({ time: t, isSoldOut: false })),
-          });
-          inImaxSection = false;
+
+      if (times.length > 0) {
+        // IMAX 앞에서 영화 제목 찾기
+        const imaxIdx = bodyText.toUpperCase().indexOf('IMAX');
+        let movieName = movieKeyword || '';
+        if (!movieName && imaxIdx > 0) {
+          const before = bodyText.substring(Math.max(0, imaxIdx - 200), imaxIdx);
+          const lines = before.split('\n').map((l) => l.trim()).filter((l) => l.length > 2 && l.length < 50);
+          movieName = lines[lines.length - 1] || 'IMAX 상영';
         }
+
+        showtimes.push({ movieName, hallName: 'IMAX', times });
       }
     }
   }
 
-  // 페이지 텍스트 (디버그용)
-  debug.pageText = bodyText.substring(0, 2000);
+  // 패턴 매칭 실패 시 텍스트 기반 파싱
+  if (showtimes.length === 0 && debug.hasImax) {
+    const text = bodyText;
+    // "IMAX" 키워드 이후 "HH:MM-HH:MM" 패턴 찾기
+    const idx = text.toUpperCase().indexOf('IMAX');
+    if (idx >= 0) {
+      const afterImax = text.substring(idx, Math.min(text.length, idx + 1000));
+      const showPattern = /(\d{2}:\d{2})-(\d{2}:\d{2})\s+(\d+)\/(\d+)석/g;
+      let match;
+      const times = [];
+      while ((match = showPattern.exec(afterImax)) !== null) {
+        times.push({
+          startTime: match[1],
+          endTime: match[2],
+          remainSeats: parseInt(match[3]),
+          totalSeats: parseInt(match[4]),
+          isSoldOut: parseInt(match[3]) === 0,
+        });
+      }
+      if (times.length > 0) {
+        showtimes.push({ movieName: movieKeyword || 'IMAX 상영', hallName: 'IMAX', times });
+      }
+
+      debug.afterImaxText = afterImax.substring(0, 300);
+    }
+  }
+
+  // 디버그: IMAX 근처 텍스트
+  if (debug.hasImax) {
+    const idx = bodyText.toUpperCase().indexOf('IMAX');
+    debug.imaxContext = bodyText.substring(Math.max(0, idx - 50), Math.min(bodyText.length, idx + 400));
+  }
 
   return { showtimes, debug };
 }
@@ -228,51 +207,36 @@ async function checkImax() {
       const showtimes = result.showtimes || [];
       const debug = result.debug || {};
 
-      logs.push({ time: now(), msg: `[페이지] ${debug.url} | ${debug.textLength}자 | IMAX: ${debug.hasImax}`, type: 'info' });
+      logs.push({ time: now(), msg: `[${date}] IMAX: ${debug.hasImax} | ${debug.textLength}자`, type: 'info' });
 
-      // 가로챈 API 로그
-      if (debug.capturedCount > 0) {
-        logs.push({ time: now(), msg: `[가로챈 API] ${debug.capturedCount}건`, type: 'success' });
-        for (const api of (debug.capturedApis || []).slice(0, 15)) {
-          const icon = api.hasImax ? '🎯' : '📡';
-          logs.push({ time: now(), msg: `${icon} ${api.url.substring(0, 80)} | ${api.status} | ${api.length}자 | IMAX:${api.hasImax}`, type: api.hasImax ? 'success' : 'info' });
-          if (api.hasImax) {
-            logs.push({ time: now(), msg: `[IMAX 데이터] ${api.bodyPreview}`, type: 'success' });
-          }
-        }
-      } else {
-        logs.push({ time: now(), msg: `[가로챈 API] 없음 (intercept.js 미작동?)`, type: 'error' });
+      if (debug.imaxContext) {
+        logs.push({ time: now(), msg: `[IMAX] ${debug.imaxContext.substring(0, 200)}`, type: 'info' });
       }
 
-      // IMAX 컨텍스트
-      for (const ctx of (debug.imaxContexts || []).slice(0, 2)) {
-        logs.push({ time: now(), msg: `[IMAX 근처] ${ctx.substring(0, 200)}`, type: 'info' });
-      }
-
-      // 시간 정보
-      if (debug.timesFound?.length) {
-        logs.push({ time: now(), msg: `[시간] ${debug.timesFound.join(', ')}`, type: 'info' });
-      }
-
-      // 상영 결과
       if (showtimes.length > 0) {
         for (const s of showtimes) {
-          const availTimes = s.times.map((t) => t.time).join(', ');
-          const key = `${s.movieName}-${date}-${availTimes}`;
+          const timeStr = s.times
+            .filter((t) => !t.isSoldOut)
+            .map((t) => `${t.startTime}(${t.remainSeats}/${t.totalSeats}석)`)
+            .join(' ');
+
+          const key = `${s.movieName}-${date}-${s.times.map((t) => t.startTime).join(',')}`;
           if (!notifiedKeys.includes(key)) {
             chrome.notifications.create(key, {
-              type: 'basic', iconUrl: 'icon.png',
-              title: 'IMAX 예매 오픈!',
-              message: `${s.movieName}\n${config.theaterName} | ${date.replace(/(\d{4})(\d{2})(\d{2})/, '$1.$2.$3')}\n${availTimes}`,
-              priority: 2, requireInteraction: true,
+              type: 'basic',
+              iconUrl: 'icon.png',
+              title: '🎬 IMAX 예매 오픈!',
+              message: `${s.movieName}\n${config.theaterName}\n${timeStr}`,
+              priority: 2,
+              requireInteraction: true,
             });
             notifiedKeys.push(key);
           }
-          logs.push({ time: now(), msg: `🎬 IMAX 발견! ${s.movieName} (${availTimes})`, type: 'success' });
+          logs.push({ time: now(), msg: `🎬 ${s.movieName} IMAX | ${timeStr}`, type: 'success' });
         }
         await chrome.storage.local.set({ notifiedKeys });
       } else {
-        logs.push({ time: now(), msg: `${config.theaterName} ${date} — IMAX 상영 없음`, type: 'info' });
+        logs.push({ time: now(), msg: `${config.theaterName} ${date} — IMAX 없음`, type: 'info' });
       }
     } catch (e) {
       logs.push({ time: now(), msg: `오류: ${e.message}`, type: 'error' });
@@ -280,7 +244,7 @@ async function checkImax() {
   }
 
   const prev = (await chrome.storage.local.get('logs')).logs || [];
-  await chrome.storage.local.set({ logs: [...logs, ...prev].slice(0, 300) });
+  await chrome.storage.local.set({ logs: [...logs, ...prev].slice(0, 200) });
 }
 
 function now() { return new Date().toLocaleTimeString('ko-KR'); }
