@@ -10,44 +10,45 @@ header {
 }
 
 header h1 {
-  font-size: 32px;
-  margin: 0 0 8px;
+  font-size: 28px;
+  margin: 0 0 6px;
 }
 
 .subtitle {
   color: var(--text);
   margin: 0;
+  font-size: 15px;
 }
 
-/* 에러/성공 배너 */
-.error-banner {
-  background: #fef2f2;
-  color: #991b1b;
-  border: 1px solid #fca5a5;
-  border-radius: 8px;
-  padding: 12px 16px;
-  margin-bottom: 20px;
+.hint {
+  font-size: 13px;
+  color: var(--text);
+  margin: 0 0 10px;
 }
 
-.found-banner {
+/* 발견 섹션 */
+.found-section {
+  margin-bottom: 24px;
+}
+
+.found-title {
+  color: #16a34a;
+  font-size: 20px;
+  margin: 0 0 12px;
+  animation: blink 1.5s infinite;
+}
+
+.found-card {
   background: #f0fdf4;
   border: 2px solid #4ade80;
   border-radius: 12px;
-  padding: 20px;
-  margin-bottom: 24px;
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
+  padding: 16px 20px;
+  margin-bottom: 12px;
   animation: glow 1.5s ease-in-out infinite alternate;
 }
 
 @media (prefers-color-scheme: dark) {
-  .error-banner {
-    background: #451a1a;
-    color: #fca5a5;
-    border-color: #7f1d1d;
-  }
-  .found-banner {
+  .found-card {
     background: #052e16;
     border-color: #16a34a;
   }
@@ -55,21 +56,41 @@ header h1 {
 
 @keyframes glow {
   from { box-shadow: 0 0 4px rgba(74, 222, 128, 0.3); }
-  to { box-shadow: 0 0 20px rgba(74, 222, 128, 0.6); }
+  to { box-shadow: 0 0 16px rgba(74, 222, 128, 0.5); }
 }
 
-.found-icon {
-  font-size: 36px;
-  flex-shrink: 0;
-}
-
-.found-banner strong {
+.found-movie {
   font-size: 18px;
+  font-weight: 700;
   color: var(--text-h);
 }
 
-.found-banner p {
-  margin: 6px 0 12px;
+.found-detail {
+  font-size: 14px;
+  color: var(--text);
+  margin: 4px 0 10px;
+}
+
+.found-times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.time-badge {
+  background: var(--accent-bg);
+  color: var(--accent);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--mono);
+}
+
+.time-badge small {
+  font-weight: 400;
+  opacity: 0.8;
 }
 
 .book-btn {
@@ -80,7 +101,7 @@ header h1 {
   border-radius: 8px;
   text-decoration: none;
   font-weight: 600;
-  font-size: 16px;
+  font-size: 15px;
   transition: background 0.2s;
 }
 
@@ -106,12 +127,11 @@ header h1 {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px;
-  background: var(--bg);
 }
 
 .config-card h2 {
-  font-size: 16px;
-  margin: 0 0 12px;
+  font-size: 15px;
+  margin: 0 0 4px;
 }
 
 .selected-tag {
@@ -122,7 +142,7 @@ header h1 {
   color: var(--accent);
   padding: 4px 10px;
   border-radius: 20px;
-  font-size: 14px;
+  font-size: 13px;
   margin-bottom: 10px;
   font-weight: 500;
 }
@@ -133,16 +153,20 @@ header h1 {
   color: var(--accent);
   cursor: pointer;
   padding: 0 2px;
-  font-size: 14px;
+  font-size: 13px;
+}
+
+.theater-type {
+  font-size: 11px;
+  opacity: 0.7;
 }
 
 .search-input {
   width: 100%;
-  padding: 8px 12px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  font-size: 14px;
-  margin-bottom: 8px;
+  font-size: 15px;
   box-sizing: border-box;
   background: var(--bg);
   color: var(--text-h);
@@ -158,17 +182,20 @@ header h1 {
   list-style: none;
   padding: 0;
   margin: 0;
-  max-height: 220px;
+  max-height: 240px;
   overflow-y: auto;
 }
 
 .select-list li {
-  padding: 8px 12px;
+  padding: 8px 10px;
   cursor: pointer;
   border-radius: 6px;
   font-size: 14px;
   color: var(--text-h);
   transition: background 0.15s;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
 
 .select-list li:hover {
@@ -180,15 +207,69 @@ header h1 {
   color: #fff;
 }
 
-.select-list li.loading {
-  color: var(--text);
-  cursor: default;
-  text-align: center;
-  padding: 20px;
+.select-list li.active .theater-badge {
+  color: rgba(255, 255, 255, 0.8);
 }
 
-.date-list li {
-  padding: 6px 12px;
+.theater-badge {
+  font-size: 11px;
+  color: var(--text);
+}
+
+/* 날짜 그리드 */
+.date-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.date-btn {
+  padding: 6px 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.date-btn:hover {
+  border-color: var(--accent);
+}
+
+.date-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.date-btn.weekend .date-weekday {
+  color: #ef4444;
+}
+
+.date-btn.active .date-weekday {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.date-day {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+.date-btn.active .date-day {
+  color: #fff;
+}
+
+.date-weekday {
+  font-size: 11px;
+  color: var(--text);
 }
 
 /* 컨트롤 */
@@ -198,6 +279,7 @@ header h1 {
   gap: 12px;
   justify-content: center;
   margin-bottom: 32px;
+  flex-wrap: wrap;
 }
 
 .btn {
@@ -246,6 +328,7 @@ header h1 {
 .pulse {
   color: #22c55e;
   font-weight: 500;
+  font-size: 14px;
   animation: blink 1.5s infinite;
 }
 
@@ -261,9 +344,26 @@ header h1 {
   padding: 16px;
 }
 
-.log-section h2 {
-  font-size: 16px;
-  margin: 0 0 12px;
+.log-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.log-header h2 {
+  font-size: 15px;
+  margin: 0;
+}
+
+.log-clear {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text);
 }
 
 .log-list {
@@ -272,12 +372,12 @@ header h1 {
   margin: 0;
   max-height: 200px;
   overflow-y: auto;
-  font-size: 13px;
+  font-size: 12px;
   font-family: var(--mono);
 }
 
 .log-list li {
-  padding: 4px 0;
+  padding: 3px 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -288,4 +388,12 @@ header h1 {
 .log-time {
   color: var(--text);
   margin-right: 8px;
+}
+
+.log-success {
+  color: #16a34a;
+}
+
+.log-error {
+  color: #ef4444;
 }
