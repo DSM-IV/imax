@@ -113,53 +113,48 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
       logs.push(`3.극장검색: ${s3}`);
       await wait(3000); // 자동완성 로딩 대기 증가
 
-      // 자동완성에서 클릭 (유연한 매칭)
-      const s4 = await run(tab.id, (name) => {
-        // 바텀시트 내의 모든 요소에서 극장명 찾기
-        const allEls = document.querySelectorAll('li, div, a, button, span, p');
-        for (const el of allEls) {
+      // 4a: 자동완성 드롭다운에서 클릭 (검색 실행)
+      const s4a = await run(tab.id, (name) => {
+        for (const el of document.querySelectorAll('li, div, a, button, span, p')) {
           if (!el.offsetParent) continue;
           const text = el.textContent?.trim();
-          // 정확히 일치
-          if (text === name) {
+          if (text === name && el.children.length <= 1) {
             el.click();
-            return 'exact: ' + text;
+            return 'clicked';
           }
         }
-        // 부분 일치 (극장명 포함 + 짧은 텍스트)
-        for (const el of allEls) {
-          if (!el.offsetParent) continue;
-          const text = el.textContent?.trim();
-          if (text?.includes(name) && text.length < name.length + 20) {
-            el.click();
-            return 'partial: ' + text.substring(0, 30);
-          }
-        }
-        // "용산" 키워드로 검색
-        const shortName = name.replace('CGV ', '').substring(0, 4);
-        for (const el of allEls) {
-          if (!el.offsetParent) continue;
-          const text = el.textContent?.trim();
-          if (text?.includes(shortName) && text.length < 20 && !text.includes('서울') && !text.includes('경기')) {
-            el.click();
-            return 'short: ' + text;
-          }
-        }
-        // 현재 바텀시트에 보이는 텍스트 목록
-        const visible = [];
-        allEls.forEach(el => {
-          if (el.offsetParent && el.children.length === 0) {
-            const t = el.textContent?.trim();
-            if (t && t.length > 1 && t.length < 30) visible.push(t);
-          }
-        });
-        return 'fail (visible: ' + [...new Set(visible)].slice(0, 10).join(', ') + ')';
+        return 'fail';
       }, [theaterName]);
-      logs.push(`4.극장선택: ${s4}`);
+      logs.push(`4a.자동완성: ${s4a}`);
+      await wait(2000);
+
+      // 4b: 검색 결과에서 극장 클릭 (칩에 추가)
+      const s4b = await run(tab.id, (name) => {
+        // 검색 결과 목록에서 극장명 찾기 (km 표시가 있는 행)
+        for (const el of document.querySelectorAll('li, div, a, button, span, p')) {
+          if (!el.offsetParent) continue;
+          const text = el.textContent?.trim();
+          if (text === name && el.children.length <= 1) {
+            el.click();
+            return 'clicked';
+          }
+        }
+        // km 포함된 행에서 찾기
+        for (const el of document.querySelectorAll('li, div, a, button, span, p')) {
+          if (!el.offsetParent) continue;
+          const text = el.textContent?.trim();
+          if (text?.includes(name) && text.includes('km')) {
+            el.click();
+            return 'clicked_with_km: ' + text.substring(0, 30);
+          }
+        }
+        return 'fail';
+      }, [theaterName]);
+      logs.push(`4b.검색결과: ${s4b}`);
       await wait(1500);
 
-      // 4b: "극장선택" 확인 버튼 클릭
-      const s4b = await run(tab.id, () => {
+      // 4c: "극장선택" 확인 버튼 클릭
+      const s4c = await run(tab.id, () => {
         for (const el of document.querySelectorAll('button, a, div')) {
           const text = el.textContent?.trim();
           if (text === '극장선택' && el.offsetParent) {
@@ -169,7 +164,7 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
         }
         return 'fail';
       });
-      logs.push(`4b.극장선택버튼: ${s4b}`);
+      logs.push(`4c.극장선택: ${s4c}`);
       await wait(3000);
     }
 
