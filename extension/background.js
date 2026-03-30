@@ -1,10 +1,9 @@
 const ALARM_NAME = 'cgv-imax-check';
 const CHECK_INTERVAL = 0.5; // 30초
 
-// CGV 극장 페이지를 탭으로 열고, JS 렌더링 후 DOM 읽기
 async function fetchCgvShowtimes(theaterCode, areaCode, date) {
-  // 새 CGV 극장 페이지 URL
-  const url = `https://cgv.co.kr/cnm/bzplcCgv/${theaterCode}001`;
+  // CGV 예매 페이지 열기
+  const url = 'https://cgv.co.kr/cnm/movieBook/movie';
   const tab = await chrome.tabs.create({ url, active: false });
 
   // 페이지 로드 완료 대기
@@ -16,18 +15,18 @@ async function fetchCgvShowtimes(theaterCode, areaCode, date) {
       }
     }
     chrome.tabs.onUpdated.addListener(listener);
-    setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 20000);
+    setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 25000);
   });
 
-  // Next.js 클라이언트 렌더링 대기
-  await new Promise((r) => setTimeout(r, 7000));
+  // Next.js 렌더링 + API 호출 대기
+  await new Promise((r) => setTimeout(r, 10000));
 
   let results;
   try {
     const injection = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: readRenderedPage,
-      args: [date],
+      func: analyzePageAndApis,
+      args: [theaterCode, date],
     });
     results = injection[0]?.result || {};
   } catch (e) {
@@ -38,8 +37,8 @@ async function fetchCgvShowtimes(theaterCode, areaCode, date) {
   return results;
 }
 
-// 렌더링 완료된 CGV 페이지에서 상영 정보 읽기
-function readRenderedPage(targetDate) {
+// CGV 예매 페이지에서 실행: API 호출 감지 + 페이지 분석
+function analyzePageAndApis(theaterCode, targetDate) {
   const debug = {};
   const results = [];
 
@@ -48,60 +47,67 @@ function readRenderedPage(targetDate) {
 
   debug.url = location.href;
   debug.title = document.title;
-  debug.bodyLength = bodyHtml.length;
   debug.textLength = bodyText.length;
   debug.hasImax = bodyText.toUpperCase().includes('IMAX');
   debug.hasHailMary = bodyText.includes('헤일메리');
 
-  // 페이지에 있는 모든 텍스트에서 영화/상영관/시간 구조 파악
-  // IMAX가 포함된 부분의 주변 텍스트 캡처
-  if (debug.hasImax) {
-    const text = bodyText;
-    let idx = 0;
-    const snippets = [];
-    while (idx < text.length) {
-      const pos = text.toUpperCase().indexOf('IMAX', idx);
-      if (pos === -1) break;
-      snippets.push(text.substring(Math.max(0, pos - 150), Math.min(text.length, pos + 200)));
-      idx = pos + 4;
-      if (snippets.length >= 5) break;
+  // __NEXT_DATA__ 확인
+  try {
+    const nextEl = document.getElementById('__NEXT_DATA__');
+    if (nextEl) {
+      const nd = JSON.parse(nextEl.textContent);
+      debug.buildId = nd.buildId;
+      debug.page = nd.page;
+      const pp = nd.props?.pageProps || {};
+      debug.pagePropsKeys = Object.keys(pp);
+      // pageProps 안에 상영 데이터가 있을 수 있음
+      debug.pagePropsPreview = JSON.stringify(pp).substring(0, 500);
     }
-    debug.imaxSnippets = snippets;
+  } catch (e) {
+    debug.nextDataError = e.message;
   }
 
-  // 헤일메리가 있는 부분 캡처
-  if (debug.hasHailMary) {
-    const pos = bodyText.indexOf('헤일메리');
-    debug.hailMarySnippet = bodyText.substring(Math.max(0, pos - 100), Math.min(bodyText.length, pos + 300));
+  // Performance API로 페이지가 호출한 API 엔드포인트 수집
+  try {
+    const resources = performance.getEntriesByType('resource');
+    const apis = resources
+      .filter((r) => r.initiatorType === 'fetch' || r.initiatorType === 'xmlhttprequest')
+      .map((r) => r.name);
+    debug.apiCalls = apis.slice(0, 30);
+  } catch (e) {
+    debug.perfError = e.message;
   }
 
-  // 페이지 전체 텍스트의 처음 3000자 캡처 (구조 파악용)
-  debug.pageStart = bodyText.substring(0, 2000);
-
-  // DOM 구조에서 상영시간 관련 요소 찾기
-  const allElements = document.querySelectorAll('[class]');
-  const classNames = new Set();
-  for (const el of allElements) {
-    for (const cls of el.classList) {
-      if (cls.match(/movie|screen|imax|hall|time|schedule|show|book|seat/i)) {
-        classNames.add(cls);
-      }
-    }
-  }
-  debug.relevantClasses = [...classNames].slice(0, 30);
-
-  // 시간 패턴이 있는 요소 찾기
-  const timeElements = [];
-  document.querySelectorAll('*').forEach((el) => {
-    if (el.children.length === 0) {
-      const text = el.textContent.trim();
-      if (/^\d{2}:\d{2}$/.test(text)) {
-        const parentText = el.parentElement?.parentElement?.innerText?.substring(0, 100) || '';
-        timeElements.push({ time: text, context: parentText, tag: el.tagName, classes: el.className });
-      }
+  // 페이지에서 영화 목록 요소 찾기
+  const movieElements = [];
+  document.querySelectorAll('[class*="movie"], [class*="Movie"], [class*="film"], [class*="Film"]').forEach((el) => {
+    const text = el.innerText?.substring(0, 100);
+    if (text && text.length > 2) {
+      movieElements.push({ class: el.className.substring(0, 60), text: text.substring(0, 80) });
     }
   });
-  debug.timeElements = timeElements.slice(0, 20);
+  debug.movieElements = movieElements.slice(0, 10);
+
+  // 모든 이미지의 alt 텍스트 (영화 포스터일 수 있음)
+  const imgAlts = [...document.querySelectorAll('img[alt]')]
+    .map((img) => img.alt)
+    .filter((alt) => alt.length > 1);
+  debug.imgAlts = imgAlts.slice(0, 20);
+
+  // 페이지 텍스트 처음 3000자
+  debug.pageText = bodyText.substring(0, 3000);
+
+  // IMAX 근처 텍스트
+  if (debug.hasImax) {
+    const idx = bodyText.toUpperCase().indexOf('IMAX');
+    debug.imaxContext = bodyText.substring(Math.max(0, idx - 200), idx + 300);
+  }
+
+  // 헤일메리 근처 텍스트
+  if (debug.hasHailMary) {
+    const idx = bodyText.indexOf('헤일메리');
+    debug.hailMaryContext = bodyText.substring(Math.max(0, idx - 100), idx + 300);
+  }
 
   return { showtimes: results, debug };
 }
@@ -115,66 +121,60 @@ async function checkImax() {
   if (!config.monitoring) return;
   if (!config.theaterCode || !config.dates?.length) return;
 
-  const notifiedKeys = config.notifiedKeys || [];
   const logs = [];
 
   for (const date of config.dates) {
     try {
       const result = await fetchCgvShowtimes(config.theaterCode, config.areaCode, date);
-      const showtimes = result.showtimes || [];
       const debug = result.debug || {};
 
-      logs.push({
-        time: new Date().toLocaleTimeString('ko-KR'),
-        msg: `[페이지] ${debug.url} | ${debug.title} | 텍스트: ${debug.textLength}자`,
-        type: 'info',
-      });
-      logs.push({
-        time: new Date().toLocaleTimeString('ko-KR'),
-        msg: `[감지] IMAX: ${debug.hasImax} | 헤일메리: ${debug.hasHailMary}`,
-        type: debug.hasImax ? 'success' : 'info',
-      });
+      logs.push({ time: now(), msg: `[페이지] ${debug.url} | ${debug.title} | ${debug.textLength}자`, type: 'info' });
+      logs.push({ time: now(), msg: `[감지] IMAX: ${debug.hasImax} | 헤일메리: ${debug.hasHailMary}`, type: debug.hasImax || debug.hasHailMary ? 'success' : 'info' });
 
-      if (debug.imaxSnippets?.length) {
-        for (const s of debug.imaxSnippets.slice(0, 2)) {
-          logs.push({ time: new Date().toLocaleTimeString('ko-KR'), msg: `[IMAX 근처] ${s.substring(0, 150)}`, type: 'info' });
+      if (debug.buildId) {
+        logs.push({ time: now(), msg: `[Next.js] buildId: ${debug.buildId} | page: ${debug.page}`, type: 'info' });
+      }
+      if (debug.pagePropsKeys?.length) {
+        logs.push({ time: now(), msg: `[데이터] keys: ${debug.pagePropsKeys.join(', ')}`, type: 'info' });
+      }
+      if (debug.pagePropsPreview) {
+        logs.push({ time: now(), msg: `[데이터 미리보기] ${debug.pagePropsPreview.substring(0, 200)}`, type: 'info' });
+      }
+      if (debug.apiCalls?.length) {
+        for (const api of debug.apiCalls.slice(0, 10)) {
+          logs.push({ time: now(), msg: `[API] ${api}`, type: 'info' });
         }
       }
-
-      if (debug.hailMarySnippet) {
-        logs.push({ time: new Date().toLocaleTimeString('ko-KR'), msg: `[헤일메리] ${debug.hailMarySnippet.substring(0, 150)}`, type: 'info' });
+      if (debug.movieElements?.length) {
+        for (const me of debug.movieElements.slice(0, 5)) {
+          logs.push({ time: now(), msg: `[영화요소] ${me.class} → ${me.text}`, type: 'info' });
+        }
       }
-
-      if (debug.relevantClasses?.length) {
-        logs.push({ time: new Date().toLocaleTimeString('ko-KR'), msg: `[CSS] ${debug.relevantClasses.join(', ')}`, type: 'info' });
+      if (debug.imgAlts?.length) {
+        logs.push({ time: now(), msg: `[포스터] ${debug.imgAlts.join(', ')}`, type: 'info' });
       }
-
-      if (debug.timeElements?.length) {
-        const times = debug.timeElements.slice(0, 5).map((t) => `${t.time}(${t.context.substring(0, 40)})`);
-        logs.push({ time: new Date().toLocaleTimeString('ko-KR'), msg: `[시간] ${times.join(' | ')}`, type: 'info' });
+      if (debug.imaxContext) {
+        logs.push({ time: now(), msg: `[IMAX] ${debug.imaxContext.substring(0, 200)}`, type: 'success' });
       }
-
-      if (debug.pageStart) {
-        logs.push({ time: new Date().toLocaleTimeString('ko-KR'), msg: `[페이지 시작] ${debug.pageStart.substring(0, 200)}`, type: 'info' });
+      if (debug.hailMaryContext) {
+        logs.push({ time: now(), msg: `[헤일메리] ${debug.hailMaryContext.substring(0, 200)}`, type: 'success' });
       }
-
-      logs.push({
-        time: new Date().toLocaleTimeString('ko-KR'),
-        msg: `${config.theaterName} ${date} — 분석 완료`,
-        type: 'info',
-      });
+      if (debug.pageText) {
+        logs.push({ time: now(), msg: `[텍스트] ${debug.pageText.substring(0, 300)}`, type: 'info' });
+      }
     } catch (e) {
-      logs.push({ time: new Date().toLocaleTimeString('ko-KR'), msg: `오류 (${date}): ${e.message}`, type: 'error' });
+      logs.push({ time: now(), msg: `오류 (${date}): ${e.message}`, type: 'error' });
     }
   }
 
   const prev = (await chrome.storage.local.get('logs')).logs || [];
-  await chrome.storage.local.set({ logs: [...logs, ...prev].slice(0, 200) });
+  await chrome.storage.local.set({ logs: [...logs, ...prev].slice(0, 300) });
 }
 
+function now() { return new Date().toLocaleTimeString('ko-KR'); }
+
 chrome.notifications.onClicked.addListener(async () => {
-  const config = await chrome.storage.local.get(['theaterCode', 'dates']);
-  chrome.tabs.create({ url: `https://cgv.co.kr/cnm/movieBook/movie` });
+  chrome.tabs.create({ url: 'https://cgv.co.kr/cnm/movieBook/movie' });
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => { if (alarm.name === ALARM_NAME) checkImax(); });
