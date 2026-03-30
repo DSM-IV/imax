@@ -58,76 +58,54 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
     });
     logs.push(`1b.화면전환: ${movieOk ? '성공' : '실패'}`);
 
-    // ===== 2단계: ⊕ 버튼 DOM 구조 분석 + 클릭 =====
-    const s2debug = await run(tab.id, () => {
-      // 광교 텍스트가 있는 요소 찾기
-      let chipEl = null;
-      for (const el of document.querySelectorAll('*')) {
-        if (el.textContent?.trim() === '광교' && el.children.length === 0 && el.offsetParent) {
-          chipEl = el;
-          break;
-        }
-      }
-      if (!chipEl) return 'no_chip';
-
-      // 부모를 올라가면서 ⊕ 버튼 구조 파악
-      let container = chipEl;
-      let html = '';
-      for (let i = 0; i < 5; i++) {
-        container = container.parentElement;
-        if (!container) break;
-        html = container.outerHTML;
-        // 적당한 크기의 컨테이너 (너무 크지 않게)
-        if (html.length > 200 && html.length < 5000) break;
-      }
-
-      // 컨테이너의 HTML 반환 (⊕ 버튼 구조 파악용)
-      return html.substring(0, 1500);
-    });
-    logs.push(`2.DOM: ${(s2debug || '').substring(0, 300)}`);
-
-    // 실제 클릭 시도: outerHTML에서 ⊕ 버튼 태그/클래스 파악 후 클릭
+    // ===== 2단계: ⊕ 버튼 클릭 =====
+    // 전략: 페이지의 모든 클릭 가능 요소를 하나씩 클릭하면서 바텀시트가 열리는지 확인
     let sheetOpen = false;
-    for (let attempt = 0; attempt < 3 && !sheetOpen; attempt++) {
-      await run(tab.id, () => {
-        // 광교 칩의 부모 컨테이너에서 마지막 버튼/링크 클릭
-        let chipEl = null;
-        for (const el of document.querySelectorAll('*')) {
-          if (el.textContent?.trim() === '광교' && el.children.length === 0 && el.offsetParent) {
-            chipEl = el; break;
-          }
-        }
-        if (!chipEl) return;
 
-        // 부모를 3단계까지 올라가며 탐색
-        let parent = chipEl;
-        for (let i = 0; i < 4; i++) {
-          parent = parent.parentElement;
-          if (!parent) return;
-
-          // 이 레벨에서 ⊕ 버튼 찾기 (텍스트 없는 작은 요소)
-          const children = parent.children;
-          for (let j = children.length - 1; j >= 0; j--) {
-            const child = children[j];
-            const text = child.textContent?.trim();
-            const rect = child.getBoundingClientRect();
-            // 텍스트가 없거나 매우 짧고, 크기가 작은 요소 = ⊕ 아이콘
-            if ((!text || text.length <= 1) && rect.width > 5 && rect.width < 60 && rect.height > 5) {
-              child.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-              return;
-            }
-          }
+    // SVG가 포함된 모든 작은 요소 수집
+    const candidates = await run(tab.id, () => {
+      const items = [];
+      document.querySelectorAll('button, a, div, span').forEach((el, idx) => {
+        if (!el.offsetParent) return;
+        const rect = el.getBoundingClientRect();
+        const hasSvg = el.querySelector('svg') !== null;
+        const text = el.textContent?.trim() || '';
+        // SVG 포함 + 작은 크기 + 텍스트 없음/짧음
+        if (hasSvg && rect.width > 10 && rect.width < 60 && text.length <= 1) {
+          items.push({ idx, tag: el.tagName, w: Math.round(rect.width), h: Math.round(rect.height), y: Math.round(rect.y), cls: (el.className?.toString() || '').substring(0, 40) });
         }
       });
-      await wait(2000);
+      return items;
+    });
+    logs.push(`2.후보: ${(candidates || []).length}개 | ${JSON.stringify((candidates || []).slice(0, 3)).substring(0, 150)}`);
+
+    // 각 후보를 순서대로 클릭하면서 바텀시트 열리는지 확인
+    for (let i = 0; i < (candidates || []).length && !sheetOpen; i++) {
+      await run(tab.id, (targetIdx) => {
+        let count = 0;
+        document.querySelectorAll('button, a, div, span').forEach((el) => {
+          if (!el.offsetParent) return;
+          const rect = el.getBoundingClientRect();
+          const hasSvg = el.querySelector('svg') !== null;
+          const text = el.textContent?.trim() || '';
+          if (hasSvg && rect.width > 10 && rect.width < 60 && text.length <= 1) {
+            if (count === targetIdx) {
+              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+            }
+            count++;
+          }
+        });
+      }, [i]);
+      await wait(1500);
 
       sheetOpen = await run(tab.id, () => {
         return document.body.innerText.includes('지역을 입력해주세요') ||
                document.body.innerText.includes('지역별') ||
                !!document.querySelector('input[placeholder*="지역"]');
       });
+      if (sheetOpen) logs.push(`2b.⊕ 발견: 후보 #${i}`);
     }
-    logs.push(`2b.바텀시트: ${sheetOpen ? '열림 ✅' : '안열림 ❌'}`);
+    logs.push(`2c.바텀시트: ${sheetOpen ? '열림 ✅' : '안열림 ❌'}`);
 
     // ===== 3단계: 검색창에 극장 입력 =====
     if (sheetOpen) {
