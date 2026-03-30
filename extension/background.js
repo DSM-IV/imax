@@ -1,10 +1,11 @@
 const ALARM_NAME = 'cgv-imax-check';
 const CHECK_INTERVAL = 0.5; // 30초
 
-async function fetchCgvShowtimes(theaterCode, areaCode, date, movieKeyword) {
+async function checkDateOpen(theaterCode, date, movieKeyword) {
   const url = 'https://cgv.co.kr/cnm/movieBook/movie';
   const tab = await chrome.tabs.create({ url, active: false });
 
+  // 페이지 로드 대기
   await new Promise((resolve) => {
     function listener(tabId, info) {
       if (tabId === tab.id && info.status === 'complete') {
@@ -15,207 +16,178 @@ async function fetchCgvShowtimes(theaterCode, areaCode, date, movieKeyword) {
     chrome.tabs.onUpdated.addListener(listener);
     setTimeout(() => { chrome.tabs.onUpdated.removeListener(listener); resolve(); }, 25000);
   });
+  await new Promise((r) => setTimeout(r, 6000));
 
-  await new Promise((r) => setTimeout(r, 5000));
-
-  // 1단계: 영화 클릭
+  // 1단계: 영화 클릭 (여러 방법 시도)
   try {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: clickMovie,
+      func: (kw) => {
+        if (!kw) return;
+        const keyword = kw.toLowerCase();
+        // 방법 1: 포스터 이미지 클릭
+        for (const img of document.querySelectorAll('img[alt]')) {
+          if (img.alt.toLowerCase().includes(keyword)) {
+            const target = img.closest('a, button, [role="button"], li') || img;
+            target.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            return;
+          }
+        }
+        // 방법 2: 텍스트 클릭
+        for (const el of document.querySelectorAll('strong, span, a, button, p')) {
+          if (el.textContent.trim().toLowerCase().includes(keyword) && el.textContent.length < 30) {
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            return;
+          }
+        }
+      },
       args: [movieKeyword || ''],
+    });
+  } catch {}
+  await new Promise((r) => setTimeout(r, 4000));
+
+  // 2단계: 극장 선택
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: (code) => {
+        const names = {
+          '0013': '용산아이파크몰', '0074': '왕십리', '0056': '강남', '0059': '영등포',
+          '0001': '명동', '0229': '여의도', '0014': '건대입구', '0247': '연수',
+          '0070': '수원', '0218': '센텀시티', '0088': '대전', '0216': '광주터미널',
+        };
+        const name = names[code] || code;
+        for (const el of document.querySelectorAll('*')) {
+          if (el.textContent.trim() === name && el.children.length === 0) {
+            el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+            return;
+          }
+        }
+      },
+      args: [theaterCode],
     });
   } catch {}
   await new Promise((r) => setTimeout(r, 3000));
 
-  // 2단계: 극장 선택 + 날짜 클릭
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: selectTheaterAndDate,
-      args: [theaterCode, date],
-    });
-  } catch {}
-  await new Promise((r) => setTimeout(r, 5000));
-
-  // 3단계: 결과 읽기
-  let results;
+  // 3단계: 날짜 상태 확인 + IMAX 데이터 읽기
+  let result;
   try {
     const injection = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: readResults,
+      func: checkPage,
       args: [date],
     });
-    results = injection[0]?.result || {};
+    result = injection[0]?.result || {};
   } catch (e) {
-    results = { showtimes: [], debug: { error: e.message } };
+    result = { error: e.message };
   }
 
   try { await chrome.tabs.remove(tab.id); } catch {}
-  return results;
+  return result;
 }
 
-function clickMovie(keyword) {
-  if (!keyword) return;
-  const kw = keyword.toLowerCase();
-  const imgs = document.querySelectorAll('img[alt]');
-  for (const img of imgs) {
-    if (img.alt.toLowerCase().includes(kw)) {
-      const clickable = img.closest('a') || img.closest('button') || img;
-      clickable.click();
-      return;
-    }
-  }
-}
-
-function selectTheaterAndDate(theaterCode, date) {
-  const theaterNames = {
-    '0013': '용산아이파크몰', '0074': '왕십리', '0056': '강남', '0059': '영등포',
-    '0001': '명동', '0229': '여의도', '0014': '건대입구', '0247': '연수',
-    '0070': '수원', '0218': '센텀시티', '0088': '대전', '0216': '광주터미널',
-    '0055': '청주', '0131': '대구',
-  };
-  const theaterName = theaterNames[theaterCode] || theaterCode;
-
-  // 극장 선택: 정확한 이름 매칭
-  const allEls = document.querySelectorAll('a, button, li, div, span, strong');
-  for (const el of allEls) {
-    const text = el.textContent.trim();
-    if (text === theaterName || text.includes(theaterName)) {
-      if (text.length < 30) {
-        el.click();
-        break;
-      }
-    }
-  }
-
-  // 날짜 클릭
-  if (date) {
-    const day = parseInt(date.substring(6, 8));
-    const dayStr = String(day).padStart(2, '0');
-    setTimeout(() => {
-      // 날짜 버튼 찾기 (CGV 날짜 형식: "03", "04" 등)
-      const dateEls = document.querySelectorAll('a, button, li, span, div');
-      for (const el of dateEls) {
-        const text = el.textContent.trim();
-        // 정확히 날짜 숫자만 매칭 (길이 2-3)
-        if ((text === dayStr || text === String(day)) && text.length <= 3) {
-          el.click();
-          break;
-        }
-      }
-    }, 2000);
-  }
-}
-
-function readResults(targetDate) {
-  const debug = {};
-  const showtimes = [];
-
-  const bodyText = document.body?.innerText || '';
-  debug.textLength = bodyText.length;
-  debug.url = location.href;
-
+function checkPage(targetDate) {
   const targetDay = parseInt(targetDate.substring(6, 8));
   const targetDayStr = String(targetDay).padStart(2, '0');
+  const bodyText = document.body?.innerText || '';
 
-  // 선택된 날짜 확인: 활성화된 날짜 버튼 찾기
-  // CGV에서 선택된 날짜는 빨간 원으로 표시됨
-  let activeDateFound = false;
-  const allEls = document.querySelectorAll('*');
-  for (const el of allEls) {
+  const result = {
+    url: location.href,
+    textLength: bodyText.length,
+    movieFound: false,
+    dateOpen: false,
+    imaxTimes: [],
+    movieName: '',
+    debug: {},
+  };
+
+  // 영화가 선택되었는지 확인 ("전체보기", "시간", 날짜 버튼이 보이면 선택된 것)
+  result.movieFound = bodyText.includes('전체보기') && /\d{2}:\d{2}/.test(bodyText) || bodyText.includes('IMAX관');
+
+  // 영화 이름 추출
+  const titleMatch = bodyText.match(/([\uAC00-\uD7A3a-zA-Z0-9 :·\-]+)\s+\d+시간\s*\d*분/);
+  if (titleMatch) {
+    let name = titleMatch[1].trim();
+    // 마지막 줄만 (앞에 노이즈 제거)
+    const parts = name.split('\n');
+    result.movieName = parts[parts.length - 1].trim();
+  }
+
+  // 날짜 버튼들 분석
+  // CGV 날짜 버튼: 숫자(01~31)를 포함하는 작은 요소들
+  const dateButtons = [];
+  for (const el of document.querySelectorAll('*')) {
     const text = el.textContent.trim();
-    if ((text === targetDayStr || text === String(targetDay)) && text.length <= 3) {
-      const styles = window.getComputedStyle(el);
-      const parentStyles = window.getComputedStyle(el.parentElement || el);
-      const cls = (el.className + ' ' + (el.parentElement?.className || '')).toLowerCase();
+    if (text.length > 3 || text.length === 0) continue;
+    if (!/^\d{1,2}$/.test(text)) continue;
+    const num = parseInt(text);
+    if (num < 1 || num > 31) continue;
 
-      // 활성 상태 판단: 클래스에 active/selected/on 포함, 또는 빨간 배경
-      const bgColor = styles.backgroundColor || parentStyles.backgroundColor;
-      const isActive = cls.includes('active') || cls.includes('select') || cls.includes('on') ||
-                       cls.includes('current') || bgColor.includes('rgb(2');  // 빨간계열
+    // 이 요소 또는 부모의 스타일 확인
+    const target = el.closest('button, a, li, div') || el;
+    const style = window.getComputedStyle(target);
+    const elStyle = window.getComputedStyle(el);
 
-      // 비활성 상태 판단: opacity 낮음, 회색 텍스트
-      const opacity = parseFloat(styles.opacity);
-      const color = styles.color;
-      const isDisabled = opacity < 0.5 || cls.includes('disabled') || cls.includes('dim') ||
-                         color.includes('rgb(200') || color.includes('rgb(180') || color.includes('rgb(150');
+    const opacity = parseFloat(style.opacity);
+    const color = elStyle.color;
+    const pointerEvents = style.pointerEvents;
+    const cls = target.className?.toLowerCase() || '';
 
-      if (isActive && !isDisabled) {
-        activeDateFound = true;
-      }
+    // RGB 값 파싱
+    const rgbMatch = color.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+    const r = rgbMatch ? parseInt(rgbMatch[1]) : 0;
+    const g = rgbMatch ? parseInt(rgbMatch[2]) : 0;
+    const b = rgbMatch ? parseInt(rgbMatch[3]) : 0;
 
-      debug.dateCheck = { text, cls: cls.substring(0, 80), bgColor, opacity, color, isActive, isDisabled };
-      break;
-    }
+    // 회색/연한색 = 비활성 (R,G,B가 모두 150 이상이면 연한색)
+    const isLight = r > 150 && g > 150 && b > 150;
+    const isDisabled = isLight || opacity < 0.5 || pointerEvents === 'none' ||
+                       cls.includes('disabled') || cls.includes('dim') || cls.includes('off');
+
+    dateButtons.push({
+      day: num,
+      text,
+      isDisabled,
+      color,
+      opacity,
+      cls: cls.substring(0, 50),
+    });
   }
 
-  debug.activeDateFound = activeDateFound;
+  result.debug.dateButtons = dateButtons.filter((d) => d.day >= targetDay - 2 && d.day <= targetDay + 2);
 
-  // "스케줄이 없습니다" 확인
-  const noSchedule = bodyText.includes('스케줄이 없습니다');
-  debug.noSchedule = noSchedule;
-
-  // 날짜가 활성화되지 않았으면 미오픈
-  if (!activeDateFound && !noSchedule) {
-    // 날짜 버튼을 못 찾았을 수 있으므로, IMAX 데이터가 있는지도 확인
-    // 없으면 미오픈으로 판단
+  // 타겟 날짜 상태 확인
+  const targetBtn = dateButtons.find((d) => d.day === targetDay);
+  if (targetBtn) {
+    result.dateOpen = !targetBtn.isDisabled;
+    result.debug.targetDate = targetBtn;
   }
 
-  if (noSchedule) {
-    debug.dateNotOpen = true;
-    return { showtimes: [], debug };
-  }
-
-  // IMAX 상영 정보 파싱
-  // 페이지 텍스트에서 "IMAX관" 이후 상영시간 블록 추출
-  const hasImaxSection = bodyText.includes('IMAX관') || bodyText.includes('IMAX LASER');
-  debug.hasImaxSection = hasImaxSection;
-
-  if (hasImaxSection) {
-    // "IMAX관" 위치 찾기
+  // IMAX 상영 시간 추출 (날짜가 열렸거나 이미 표시되는 경우)
+  if (bodyText.includes('IMAX관')) {
     const imaxIdx = bodyText.indexOf('IMAX관');
-    if (imaxIdx >= 0) {
-      const afterImax = bodyText.substring(imaxIdx);
+    const afterImax = bodyText.substring(imaxIdx);
+    // IMAX 섹션만 (다음 상영관 전까지)
+    const nextScreen = afterImax.match(/\n\s*(2D|3D|\d+관|DOLBY|SCREENX|4DX|ULTRA|COMFORT)/);
+    const section = afterImax.substring(0, nextScreen ? nextScreen.index : 300);
+    result.debug.imaxSection = section.substring(0, 200);
 
-      // IMAX 섹션만 추출: 다음 상영관 시작 전까지
-      // 다른 상영관: "2D ", "3D ", "숫자관", "DOLBY", "SCREENX", "4DX" 등
-      const nextScreenMatch = afterImax.match(/\n\s*(2D|3D|\d+관|DOLBY|SCREENX|4DX|ULTRA|COMFORT)/);
-      const imaxSectionEnd = nextScreenMatch ? nextScreenMatch.index : 300;
-      const imaxBlock = afterImax.substring(0, imaxSectionEnd);
-      debug.imaxSection = imaxBlock.substring(0, 300);
-
-      // 시간 추출: "13:00-15:46 215/282석" 또는 "13:00-15:46\n215·282석"
-      const showPattern = /(\d{2}:\d{2})-(\d{2}:\d{2})\s*[\n]?\s*(\d+)[·/:](\d+)석/g;
-      let match;
-      const times = [];
-      while ((match = showPattern.exec(imaxBlock)) !== null) {
-        times.push({
-          startTime: match[1],
-          endTime: match[2],
-          remainSeats: parseInt(match[3]),
-          totalSeats: parseInt(match[4]),
-          isSoldOut: parseInt(match[3]) === 0,
-        });
-      }
-
-      // 영화 이름: "프로젝트 헤일메리 2시간 36분" 패턴에서 추출
-      const fullText = bodyText;
-      const titleMatch = fullText.match(/([\uAC00-\uD7A3a-zA-Z0-9\s:·\-]+)\s+\d+시간\s*\d*분/);
-      let movieName = titleMatch ? titleMatch[1].trim() : '';
-      // 제목 앞에 붙은 노이즈 제거 (마지막 단어부터 한글 시작점 찾기)
-      if (movieName.length > 30) {
-        const lines = movieName.split('\n');
-        movieName = lines[lines.length - 1].trim();
-      }
-
-      if (times.length > 0) {
-        showtimes.push({ movieName: movieName || 'IMAX 상영', hallName: 'IMAX', times });
-      }
+    const showPattern = /(\d{2}:\d{2})-(\d{2}:\d{2})\s*[\n]?\s*(\d+)[·/:](\d+)석/g;
+    let match;
+    while ((match = showPattern.exec(section)) !== null) {
+      result.imaxTimes.push({
+        start: match[1],
+        end: match[2],
+        remain: parseInt(match[3]),
+        total: parseInt(match[4]),
+      });
     }
   }
 
-  return { showtimes, debug };
+  // 페이지에 "스케줄이 없습니다" 표시
+  result.noSchedule = bodyText.includes('스케줄이 없습니다');
+
+  return result;
 }
 
 async function checkImax() {
@@ -232,55 +204,65 @@ async function checkImax() {
 
   for (const date of config.dates) {
     try {
-      const result = await fetchCgvShowtimes(config.theaterCode, config.areaCode, date, config.movieKeyword);
-      const showtimes = result.showtimes || [];
-      const debug = result.debug || {};
+      const r = await checkDateOpen(config.theaterCode, date, config.movieKeyword);
 
-      if (debug.noSchedule) {
-        logs.push({ time: now(), msg: `📅 ${config.theaterName} ${date} — 예매 미오픈`, type: 'info' });
+      const day = date.substring(4, 6) + '/' + date.substring(6, 8);
+
+      if (r.error) {
+        logs.push({ time: now(), msg: `❌ ${day} 오류: ${r.error}`, type: 'error' });
         continue;
       }
 
-      if (!debug.activeDateFound) {
-        logs.push({ time: now(), msg: `📅 ${config.theaterName} ${date} — 날짜 미오픈 (선택 불가)`, type: 'info' });
-        if (debug.dateCheck) {
-          logs.push({ time: now(), msg: `[날짜 상태] ${JSON.stringify(debug.dateCheck).substring(0, 150)}`, type: 'info' });
-        }
-        // IMAX 섹션이 없으면 스킵
-        if (!debug.hasImaxSection) continue;
+      // 영화 선택 확인
+      if (!r.movieFound) {
+        logs.push({ time: now(), msg: `⚠️ ${day} 영화 선택 실패 (${r.textLength}자)`, type: 'error' });
+        continue;
       }
 
-      if (debug.imaxSection) {
-        logs.push({ time: now(), msg: `[IMAX 섹션] ${debug.imaxSection.substring(0, 200)}`, type: 'info' });
-      }
-
-      if (showtimes.length > 0) {
-        for (const s of showtimes) {
-          const timeStr = s.times
-            .filter((t) => !t.isSoldOut)
-            .map((t) => `${t.startTime}(${t.remainSeats}/${t.totalSeats}석)`)
-            .join(' ');
-
-          const key = `${s.movieName}-${date}-${s.times.map((t) => t.startTime).join(',')}`;
-          if (!notifiedKeys.includes(key)) {
-            chrome.notifications.create(key, {
-              type: 'basic',
-              iconUrl: 'icon.png',
-              title: '🎬 IMAX 예매 오픈!',
-              message: `${s.movieName}\n${config.theaterName}\n${timeStr}`,
-              priority: 2,
-              requireInteraction: true,
-            });
-            notifiedKeys.push(key);
-          }
-          logs.push({ time: now(), msg: `🎬 ${s.movieName} IMAX | ${timeStr}`, type: 'success' });
-        }
-        await chrome.storage.local.set({ notifiedKeys });
+      // 날짜 상태 로그
+      const dateInfo = r.debug.targetDate;
+      if (dateInfo) {
+        logs.push({ time: now(), msg: `📅 ${day} 날짜 상태: ${r.dateOpen ? '오픈 ✅' : '미오픈 ❌'} (색상: ${dateInfo.color}, opacity: ${dateInfo.opacity})`, type: r.dateOpen ? 'success' : 'info' });
       } else {
-        logs.push({ time: now(), msg: `${config.theaterName} ${date} — IMAX 없음`, type: 'info' });
+        logs.push({ time: now(), msg: `📅 ${day} 날짜 버튼 못 찾음`, type: 'error' });
+      }
+
+      // 미오픈이면 알림 없이 스킵
+      if (!r.dateOpen) {
+        continue;
+      }
+
+      // IMAX 상영 정보
+      if (r.imaxTimes.length > 0) {
+        const timeStr = r.imaxTimes
+          .filter((t) => t.remain > 0)
+          .map((t) => `${t.start}(${t.remain}/${t.total}석)`)
+          .join(' ');
+
+        const movieName = r.movieName || config.movieKeyword || 'IMAX';
+        const key = `${movieName}-${date}`;
+
+        if (!notifiedKeys.includes(key)) {
+          chrome.notifications.create(key, {
+            type: 'basic',
+            iconUrl: 'icon.png',
+            title: '🎬 IMAX 예매 오픈!',
+            message: `${movieName}\n${config.theaterName} ${day}\n${timeStr}`,
+            priority: 2,
+            requireInteraction: true,
+          });
+          notifiedKeys.push(key);
+          await chrome.storage.local.set({ notifiedKeys });
+        }
+
+        logs.push({ time: now(), msg: `🎬 ${movieName} IMAX | ${timeStr}`, type: 'success' });
+      } else if (r.noSchedule) {
+        logs.push({ time: now(), msg: `${config.theaterName} ${day} — 스케줄 없음`, type: 'info' });
+      } else {
+        logs.push({ time: now(), msg: `${config.theaterName} ${day} — IMAX 없음`, type: 'info' });
       }
     } catch (e) {
-      logs.push({ time: now(), msg: `오류: ${e.message}`, type: 'error' });
+      logs.push({ time: now(), msg: `❌ 오류: ${e.message}`, type: 'error' });
     }
   }
 
