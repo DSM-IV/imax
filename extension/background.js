@@ -59,53 +59,35 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
     logs.push(`1b.화면전환: ${movieOk ? '성공' : '실패'}`);
 
     // ===== 2단계: ⊕ 버튼 클릭 =====
-    // 전략: 페이지의 모든 클릭 가능 요소를 하나씩 클릭하면서 바텀시트가 열리는지 확인
-    let sheetOpen = false;
-
-    // SVG가 포함된 모든 작은 요소 수집
-    const candidates = await run(tab.id, () => {
-      const items = [];
-      document.querySelectorAll('button, a, div, span').forEach((el, idx) => {
-        if (!el.offsetParent) return;
-        const rect = el.getBoundingClientRect();
-        const hasSvg = el.querySelector('svg') !== null;
-        const text = el.textContent?.trim() || '';
-        // SVG 포함 + 작은 크기 + 텍스트 없음/짧음
-        if (hasSvg && rect.width > 10 && rect.width < 60 && text.length <= 1) {
-          items.push({ idx, tag: el.tagName, w: Math.round(rect.width), h: Math.round(rect.height), y: Math.round(rect.y), cls: (el.className?.toString() || '').substring(0, 40) });
+    // "자주가는 CGV 목록 수정" 텍스트를 가진 span의 부모 버튼 클릭
+    const s2 = await run(tab.id, () => {
+      // 방법 1: voice-only 스크린리더 텍스트로 찾기
+      for (const span of document.querySelectorAll('span')) {
+        if (span.textContent?.includes('목록 수정') || span.textContent?.includes('CGV 목록')) {
+          const btn = span.closest('button, a, div, [role="button"]') || span.parentElement;
+          if (btn) { btn.click(); return 'clicked_via_voiceonly'; }
         }
-      });
-      return items;
+      }
+      // 방법 2: editBtn 클래스로 찾기
+      for (const el of document.querySelectorAll('[class*="editBtn"], [class*="edit"]')) {
+        if (el.offsetParent) { el.click(); return 'clicked_via_editBtn'; }
+      }
+      // 방법 3: 21x20 SVG 근처 버튼
+      for (const svg of document.querySelectorAll('svg[width="21"][height="20"]')) {
+        const btn = svg.closest('button, a, div') || svg.parentElement;
+        if (btn) { btn.click(); return 'clicked_via_svg21'; }
+      }
+      return 'fail';
     });
-    logs.push(`2.후보: ${(candidates || []).length}개 | ${JSON.stringify((candidates || []).slice(0, 3)).substring(0, 150)}`);
+    logs.push(`2.⊕클릭: ${s2}`);
+    await wait(2000);
 
-    // 각 후보를 순서대로 클릭하면서 바텀시트 열리는지 확인
-    for (let i = 0; i < (candidates || []).length && !sheetOpen; i++) {
-      await run(tab.id, (targetIdx) => {
-        let count = 0;
-        document.querySelectorAll('button, a, div, span').forEach((el) => {
-          if (!el.offsetParent) return;
-          const rect = el.getBoundingClientRect();
-          const hasSvg = el.querySelector('svg') !== null;
-          const text = el.textContent?.trim() || '';
-          if (hasSvg && rect.width > 10 && rect.width < 60 && text.length <= 1) {
-            if (count === targetIdx) {
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-            }
-            count++;
-          }
-        });
-      }, [i]);
-      await wait(1500);
-
-      sheetOpen = await run(tab.id, () => {
-        return document.body.innerText.includes('지역을 입력해주세요') ||
-               document.body.innerText.includes('지역별') ||
-               !!document.querySelector('input[placeholder*="지역"]');
-      });
-      if (sheetOpen) logs.push(`2b.⊕ 발견: 후보 #${i}`);
-    }
-    logs.push(`2c.바텀시트: ${sheetOpen ? '열림 ✅' : '안열림 ❌'}`);
+    const sheetOpen = await run(tab.id, () => {
+      return document.body.innerText.includes('지역을 입력해주세요') ||
+             document.body.innerText.includes('지역별') ||
+             !!document.querySelector('input[placeholder*="지역"]');
+    });
+    logs.push(`2b.바텀시트: ${sheetOpen ? '열림 ✅' : '안열림 ❌'}`);
 
     // ===== 3단계: 검색창에 극장 입력 =====
     if (sheetOpen) {
