@@ -160,14 +160,30 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
       logs.push(`4b.검색결과: ${s4b}`);
       await wait(1500);
 
-      // 4c: "극장선택" 확인 버튼 클릭
+      // 4c: "극장선택" 확인 버튼 클릭 (스크롤 후)
       const s4c = await run(tab.id, () => {
-        for (const el of document.querySelectorAll('button, a, div')) {
+        // 먼저 바텀시트를 스크롤하여 버튼 보이게
+        for (const el of document.querySelectorAll('button, a, div, span')) {
           const text = el.textContent?.trim();
-          if (text === '극장선택' && el.offsetParent) {
+          if (text === '극장선택') {
+            el.scrollIntoView({ behavior: 'instant' });
             el.click();
             return 'clicked';
           }
+        }
+        // 대안: 가장 아래쪽 큰 버튼 찾기
+        let biggest = null;
+        let maxW = 0;
+        for (const btn of document.querySelectorAll('button')) {
+          const rect = btn.getBoundingClientRect();
+          if (rect.width > maxW && rect.width > 200 && btn.offsetParent) {
+            maxW = rect.width;
+            biggest = btn;
+          }
+        }
+        if (biggest) {
+          biggest.click();
+          return 'clicked_biggest: ' + biggest.textContent?.trim().substring(0, 20);
         }
         return 'fail';
       });
