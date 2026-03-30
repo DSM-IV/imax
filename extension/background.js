@@ -1,113 +1,138 @@
 const ALARM_NAME = 'cgv-imax-check';
-const CHECK_INTERVAL = 0.5; // 30초 (분 단위)
+const CHECK_INTERVAL = 0.5; // 30초
 
-// 상영시간표 HTML 파싱
-function parseShowtimes(html) {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(html, 'text/html');
+// CGV 상영시간표 페이지를 실제 탭으로 열고 DOM을 읽는 방식
+async function fetchCgvShowtimes(theaterCode, areaCode, date) {
+  const url = `https://www.cgv.co.kr/common/showtimes/iframeTheater.aspx?areacode=${areaCode}&theatercode=${theaterCode}&date=${date}`;
+
+  // 백그라운드 탭 열기
+  const tab = await chrome.tabs.create({ url, active: false });
+
+  // 페이지 로드 대기
+  await new Promise((resolve) => {
+    function listener(tabId, info) {
+      if (tabId === tab.id && info.status === 'complete') {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+    // 15초 타임아웃
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }, 15000);
+  });
+
+  // 잠시 대기 (렌더링 완료)
+  await new Promise((r) => setTimeout(r, 2000));
+
+  // 탭에서 DOM 파싱 스크립트 실행
+  let results;
+  try {
+    const injection = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: parsePageContent,
+    });
+    results = injection[0]?.result || [];
+  } catch (e) {
+    results = [];
+  }
+
+  // 탭 닫기
+  try {
+    await chrome.tabs.remove(tab.id);
+  } catch {}
+
+  return results;
+}
+
+// 이 함수는 CGV 페이지 컨텍스트에서 실행됨
+function parsePageContent() {
   const results = [];
 
-  // 영화별 상영 정보
-  const movieItems = doc.querySelectorAll('.sect-showtimes > ul > li');
+  // 디버그: 페이지 전체 텍스트에서 IMAX 확인
+  const bodyText = document.body?.innerText || '';
+  const bodyHtml = document.body?.innerHTML || '';
+  const hasImax = bodyHtml.toUpperCase().includes('IMAX');
+
+  // 방법 1: sect-showtimes 구조 파싱
+  const movieItems = document.querySelectorAll('.sect-showtimes > ul > li');
   for (const item of movieItems) {
-    const titleEl = item.querySelector('.info-movie a strong');
+    const titleEl = item.querySelector('.info-movie a strong') || item.querySelector('.info-movie strong');
     if (!titleEl) continue;
     const movieName = titleEl.textContent.trim();
 
     const hallDivs = item.querySelectorAll('.type-hall');
     for (const hall of hallDivs) {
-      const hallNameEl = hall.querySelector('.info-hall ul li:first-child');
+      const hallNameEl = hall.querySelector('.info-hall ul li:first-child') || hall.querySelector('.info-hall li');
       const hallName = hallNameEl ? hallNameEl.textContent.trim() : '';
 
-      // IMAX 감지
+      const hallHtml = hall.innerHTML.toUpperCase();
       const isImax =
         hallName.toUpperCase().includes('IMAX') ||
-        !!hall.querySelector('span.imax') ||
-        !!hall.querySelector('.ico-imax') ||
-        !!hall.querySelector('[class*="imax"]');
-
-      if (!isImax) continue;
+        hallHtml.includes('IMAX') ||
+        !!hall.querySelector('[class*="imax"]') ||
+        !!hall.querySelector('[class*="IMAX"]');
 
       const times = [];
-      const timeLinks = hall.querySelectorAll('.info-timetable a');
-      for (const link of timeLinks) {
-        const timeEl = link.querySelector('em');
-        if (!timeEl) continue;
-        const time = timeEl.textContent.trim();
-        const isSoldOut = link.classList.contains('soldout');
-        times.push({ time, isSoldOut });
+      const timeEls = hall.querySelectorAll('.info-timetable a em, .info-timetable em');
+      for (const em of timeEls) {
+        const time = em.textContent.trim();
+        if (time && /\d{2}:\d{2}/.test(time)) {
+          const parent = em.closest('a');
+          const isSoldOut = parent ? parent.classList.contains('soldout') : false;
+          times.push({ time, isSoldOut });
+        }
       }
 
-      if (times.length > 0) {
+      if (isImax && times.length > 0) {
         results.push({ movieName, hallName, times });
       }
     }
   }
-  return results;
-}
 
-// 오프스크린 문서 없이 파싱하기 위한 대안: 정규식 기반 파싱
-function parseShowtimesRegex(html) {
-  const results = [];
-
-  // IMAX 관련 섹션 찾기
-  const imax = html.toUpperCase().includes('IMAX');
-  if (!imax) return results;
-
-  // 영화 블록 추출
-  const movieBlocks = html.split(/class="col-times"/g);
-  for (let i = 1; i < movieBlocks.length; i++) {
-    const block = movieBlocks[i];
-
-    // 영화 제목
-    const titleMatch = block.match(/<strong[^>]*>([^<]+)<\/strong>/);
-    const movieName = titleMatch ? titleMatch[1].trim() : '';
-
-    // 상영관 정보에서 IMAX 확인
-    if (!block.toUpperCase().includes('IMAX')) continue;
-
-    // 시간 추출
-    const times = [];
-    const timeRegex = /<em>(\d{2}:\d{2})<\/em>/g;
-    let match;
-    while ((match = timeRegex.exec(block)) !== null) {
-      times.push({ time: match[1], isSoldOut: false });
-    }
-
-    if (movieName && times.length > 0) {
-      results.push({ movieName, hallName: 'IMAX', times });
+  // 방법 2: 구조가 다를 경우 전체 HTML에서 IMAX 섹션 탐색
+  if (results.length === 0 && hasImax) {
+    // 모든 상영관 이름 요소에서 IMAX 찾기
+    const allElements = document.querySelectorAll('*');
+    for (const el of allElements) {
+      if (el.children.length === 0 && el.textContent.toUpperCase().includes('IMAX')) {
+        // IMAX가 포함된 텍스트 노드의 부모를 탐색하여 영화/시간 정보 찾기
+        let parent = el.closest('li') || el.closest('div') || el.parentElement;
+        if (parent) {
+          const text = parent.innerText;
+          results.push({
+            movieName: 'IMAX 상영 감지',
+            hallName: el.textContent.trim(),
+            times: [{ time: '시간 확인 필요', isSoldOut: false }],
+            rawText: text.substring(0, 500),
+          });
+          break; // 하나만 잡으면 됨
+        }
+      }
     }
   }
 
-  return results;
-}
-
-// CGV 상영시간표 가져오기
-async function fetchCgvShowtimes(theaterCode, areaCode, date) {
-  const url = `https://www.cgv.co.kr/common/showtimes/iframeTheater.aspx?areacode=${areaCode}&theatercode=${theaterCode}&date=${date}`;
-
-  const res = await fetch(url, {
-    headers: {
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'ko-KR,ko;q=0.9',
+  // 디버그 정보 포함
+  return {
+    showtimes: results,
+    debug: {
+      url: location.href,
+      title: document.title,
+      hasImax,
+      movieCount: movieItems.length,
+      bodyLength: bodyHtml.length,
+      bodySnippet: bodyHtml.substring(0, 1000),
     },
-  });
-
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const html = await res.text();
-  return parseShowtimesRegex(html);
+  };
 }
 
 // 설정 기반으로 체크
 async function checkImax() {
   const config = await chrome.storage.local.get([
-    'monitoring',
-    'theaterCode',
-    'theaterName',
-    'areaCode',
-    'dates',
-    'movieKeyword',
-    'notifiedKeys',
+    'monitoring', 'theaterCode', 'theaterName', 'areaCode',
+    'dates', 'movieKeyword', 'notifiedKeys',
   ]);
 
   if (!config.monitoring) return;
@@ -118,7 +143,16 @@ async function checkImax() {
 
   for (const date of config.dates) {
     try {
-      const showtimes = await fetchCgvShowtimes(config.theaterCode, config.areaCode, date);
+      const result = await fetchCgvShowtimes(config.theaterCode, config.areaCode, date);
+      const showtimes = result.showtimes || [];
+      const debug = result.debug || {};
+
+      // 디버그 로그
+      logs.push({
+        time: new Date().toLocaleTimeString('ko-KR'),
+        msg: `[${date}] 페이지: ${debug.url || '?'} | 제목: ${debug.title || '?'} | HTML: ${debug.bodyLength}자 | IMAX: ${debug.hasImax} | 영화수: ${debug.movieCount}`,
+        type: 'info',
+      });
 
       let filtered = showtimes;
       if (config.movieKeyword) {
@@ -134,7 +168,6 @@ async function checkImax() {
           const key = `${s.movieName}-${date}-${availTimes.join(',')}`;
           if (notifiedKeys.includes(key)) continue;
 
-          // 알림 발송
           chrome.notifications.create(key, {
             type: 'basic',
             iconUrl: 'icon.png',
@@ -168,12 +201,11 @@ async function checkImax() {
     }
   }
 
-  // 로그 저장
   const prev = (await chrome.storage.local.get('logs')).logs || [];
   await chrome.storage.local.set({ logs: [...logs, ...prev].slice(0, 100) });
 }
 
-// 알림 클릭 시 CGV 예매 페이지로 이동
+// 알림 클릭
 chrome.notifications.onClicked.addListener(async (notificationId) => {
   const config = await chrome.storage.local.get(['theaterCode', 'dates']);
   const date = config.dates?.[0] || '';
@@ -182,7 +214,7 @@ chrome.notifications.onClicked.addListener(async (notificationId) => {
   });
 });
 
-// 알람 설정
+// 알람
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) {
     checkImax();
@@ -192,9 +224,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 // 메시지 핸들러
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'START_MONITORING') {
-    chrome.storage.local.set({ monitoring: true, notifiedKeys: [] });
+    chrome.storage.local.set({ monitoring: true, notifiedKeys: [], logs: [] });
     chrome.alarms.create(ALARM_NAME, { periodInMinutes: CHECK_INTERVAL });
-    checkImax(); // 즉시 1회 실행
+    checkImax();
     sendResponse({ ok: true });
   } else if (msg.type === 'STOP_MONITORING') {
     chrome.storage.local.set({ monitoring: false });
@@ -202,6 +234,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ ok: true });
   } else if (msg.type === 'CHECK_NOW') {
     checkImax().then(() => sendResponse({ ok: true }));
-    return true; // async
+    return true;
   }
 });
