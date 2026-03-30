@@ -129,23 +129,30 @@ async function checkDateOpen(theaterCode, date, movieKeyword) {
       await wait(2000);
 
       // 4b: 검색 결과에서 극장 클릭 (칩에 추가)
+      // 자동완성이 아닌 검색 결과 행만 클릭 (km 표시로 구분)
+      await wait(1000); // 검색 결과 로딩 추가 대기
       const s4b = await run(tab.id, (name) => {
-        // 검색 결과 목록에서 극장명 찾기 (km 표시가 있는 행)
+        // km 표시가 있는 행에서 극장명 찾기 (검색 결과)
         for (const el of document.querySelectorAll('li, div, a, button, span, p')) {
           if (!el.offsetParent) continue;
+          const parent = el.parentElement;
+          const parentText = parent?.textContent || '';
           const text = el.textContent?.trim();
-          if (text === name && el.children.length <= 1) {
+          // 정확히 극장명이고, 부모/형제에 km이 있는 경우
+          if (text === name && parentText.includes('km')) {
             el.click();
-            return 'clicked';
+            return 'clicked_in_result';
           }
         }
-        // km 포함된 행에서 찾기
-        for (const el of document.querySelectorAll('li, div, a, button, span, p')) {
+        // 대안: "전체" 섹션 아래에서 극장명 찾기
+        let foundJeonche = false;
+        for (const el of document.querySelectorAll('*')) {
           if (!el.offsetParent) continue;
           const text = el.textContent?.trim();
-          if (text?.includes(name) && text.includes('km')) {
+          if (text?.includes('전체') && text.includes('(')) foundJeonche = true;
+          if (foundJeonche && text === name && el.children.length === 0) {
             el.click();
-            return 'clicked_with_km: ' + text.substring(0, 30);
+            return 'clicked_after_jeonche';
           }
         }
         return 'fail';
